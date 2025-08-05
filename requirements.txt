@@ -1,0 +1,5 @@
+flet>=0.22
+pandas
+scikit-learn
+pyarrow           # para carregar arquivos Parquet gerados em preprocessamento
+pillow            # opcional, útil para tratamento de imagens

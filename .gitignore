@@ -1,0 +1,39 @@
+# ── Python ───────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+
+# Ambiente virtual
+.env
+.venv/
+venv/
+
+# Log & relatório
+*.log
+coverage/
+
+# Jupyter/VS Code
+.ipynb_checkpoints/
+.vscode/
+.idea/
+
+# Build
+build/
+dist/
+*.egg
+
+# Sistema & OS
+.DS_Store
+Thumbs.db
+
+# Dados temporários
+*.sqlite3
+*.csv~
+
+# Docker
+**/docker-volumes/
+
+# Arquivos de vários IDEs
+*.swp
+*~
