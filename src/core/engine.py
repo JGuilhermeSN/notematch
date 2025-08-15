@@ -2,10 +2,7 @@
 from dataclasses import dataclass, field
 from typing import Dict, Callable, Optional
 
-__all__ = [
-    "Question",
-    "run_flow",
-]
+__all__ = ["Question", "run"]  # exporta apenas o que o restante do projeto usa
 
 @dataclass
 class Question:
@@ -24,16 +21,16 @@ class Question:
                 return choice
             print("Opção inválida. Tente novamente.")
 
-
-def run_flow(first_q: "Question") -> Dict[str, str]:
-    """Executa o fluxo a partir da primeira pergunta."""
+def run(first_q: "Question") -> Dict[str, str]:
+    """Executa o fluxo a partir da primeira pergunta e retorna o dicionário de respostas."""
     answers: Dict[str, str] = {}
     current_q: Optional[Question] = first_q
-
     while current_q:
         choice = current_q.ask()
         answers[current_q.prompt] = current_q.options[choice]
         next_func = current_q.next_step.get(choice)
         current_q = next_func() if next_func else None
-
     return answers
+
+# Opcional: mantenha compatibilidade com código antigo
+run_flow = run

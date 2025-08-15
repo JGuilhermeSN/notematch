@@ -1,6 +1,6 @@
 # README – NoteMatch
 
-> **Sistema de Recomendação de Notebooks Baseado em Análise Inteligente de Especificações Técnicas**
+> **Assitente de Recomendação de Notebooks Baseado em Análise Inteligente de Especificações Técnicas**
 > Projeto de TCC – IFMT, 2025.
 
 ---

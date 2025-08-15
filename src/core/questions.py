@@ -1,6 +1,8 @@
 """Árvore de decisão para coletar requisitos do usuário."""
 from typing import Dict
-from src.core.engine import Question, run_flow
+from src.core.engine import Question, run
+
+__all__ = ["build_flow", "gerar_specs", "q_area_principal"]
 
 # Perguntas de primeiro nível -------------------------------------------------
 
@@ -40,7 +42,7 @@ def q_area_profissional() -> Question:
         },
     )
 
-# Terceiro nível (exemplo de ramificação) ------------------------------------
+# Terceiro nível (ramificação) -----------------------------------------------
 
 def q_atividade_arquitetura() -> Question:
     return Question(
@@ -71,10 +73,16 @@ def q_orcamento() -> Question:
         next_step={},  # termina o fluxo
     )
 
-# Geração simplificada de especificações -------------------------------------
+# Expor a primeira pergunta para integração com a UI --------------------------
+
+def build_flow() -> Question:
+    """Retorna a primeira pergunta do fluxo."""
+    return q_area_principal()
+
+# Geração simplificada de especificações --------------------------------------
 
 def gerar_specs(respostas: Dict[str, str]) -> Dict[str, str]:
-    """Mapeia respostas a requisitos mínimos. Placeholder macroscópico."""
+    """Mapeia respostas a requisitos mínimos."""
     specs = {
         "CPU": "Intel Core i5 / Ryzen 5",
         "RAM": "8 GB",
@@ -99,9 +107,12 @@ def gerar_specs(respostas: Dict[str, str]) -> Dict[str, str]:
                 "GPU": "Integrada ou dedicada de entrada",
             })
 
-# Execução --------------------------------------------------------------------
+    return specs
+
+# Execução direta (opcional, útil para teste rápido) --------------------------
+
 if __name__ == "__main__":
-    respostas = run_flow(q_area_principal())
+    respostas = run(build_flow())
 
     print("\n=== Resumo das respostas ===")
     for pergunta, resposta in respostas.items():

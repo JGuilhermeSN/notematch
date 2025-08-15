@@ -37,3 +37,6 @@ Thumbs.db
 # Arquivos de vários IDEs
 *.swp
 *~
+
+
+src/data/raw/kaggle.json
