@@ -7,7 +7,7 @@ __all__ = ["Question", "run"]  # exporta apenas o que o restante do projeto usa
 @dataclass
 class Question:
     prompt: str
-    options: Dict[str, str]  # chave → texto
+    options: Dict[str, str]  # chave -> texto
     next_step: Dict[str, Callable[[], Optional["Question"]]] = field(default_factory=dict)
 
     def ask(self) -> str:
@@ -16,7 +16,7 @@ class Question:
             print(f"\n{self.prompt}")
             for key, text in self.options.items():
                 print(f"  [{key}] {text}")
-            choice = input("Escolha: ").strip().lower()
+            choice = input("Digite um número para selecionar a opção: ").strip().lower()
             if choice in self.options:
                 return choice
             print("Opção inválida. Tente novamente.")
@@ -32,5 +32,4 @@ def run(first_q: "Question") -> Dict[str, str]:
         current_q = next_func() if next_func else None
     return answers
 
-# Opcional: mantenha compatibilidade com código antigo
 run_flow = run

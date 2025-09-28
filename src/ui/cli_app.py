@@ -8,7 +8,7 @@ from src.core.specs_rules import infer_specs  # ou gerar_specs, conforme seu mó
 from src.core.questions import build_flow
 from src.core.engine import run
 
-def main():
+def run_cli():
     # 1) Perguntas → respostas
     first_q = build_flow()
     answers = run(first_q)
@@ -36,4 +36,4 @@ def main():
         print(top3.to_string(index=False))
 
 if __name__ == "__main__":
-    main()
+    run_cli()

@@ -1,88 +1,48 @@
-"""Árvore de decisão para coletar requisitos do usuário."""
 from typing import Dict
 from src.core.engine import Question, run
+from src.core.professions_loader import load_professions
 
-__all__ = ["build_flow", "gerar_specs", "q_area_principal"]
+# Pergunta inicial de categoria ----------------------------------------------
 
-# Perguntas de primeiro nível -------------------------------------------------
+def q_area_categoria() -> Question:
+    dados = load_professions()
+    categorias = list(dados.keys())
 
-def q_area_principal() -> Question:
     return Question(
-        prompt="Para que você precisa de um notebook?",
-        options={
-            "1": "Navegação / Uso básico",
-            "2": "Estudo",
-            "3": "Trabalho",
-            "4": "Jogos",
-        },
-        next_step={
-            "1": q_orcamento,
-            "2": q_orcamento,
-            "3": q_area_profissional,
-            "4": q_orcamento,
-        },
+        prompt="O que mais se encaixa no seu uso?",
+        options={str(i+1): cat for i, cat in enumerate(categorias)},
+        next_step={str(i+1): (lambda c=cat: lambda: q_profissao(c))() for i, cat in enumerate(categorias)},
     )
 
-# Segundo nível ---------------------------------------------------------------
+# Pergunta de profissões dentro da categoria --------------------------------
 
-def q_area_profissional() -> Question:
+def q_profissao(categoria: str) -> Question:
+    dados = load_professions()
+    profs = dados[categoria]["subcategoria"]
+
     return Question(
-        prompt="Qual área profissional?",
-        options={
-            "1": "Arquitetura",
-            "2": "Programação",
-            "3": "Design Gráfico",
-            "4": "Engenharia",
-        },
-        next_step={
-            "1": q_atividade_arquitetura,
-            "2": q_orcamento,
-            "3": q_orcamento,
-            "4": q_orcamento,
-        },
+        prompt=f"Dentro de {categoria}, o que melhor define?",
+        options={str(i+1): p for i, p in enumerate(profs)},
+        next_step={str(i+1): q_orcamento for i, _ in enumerate(profs)},
     )
 
-# Terceiro nível (ramificação) -----------------------------------------------
-
-def q_atividade_arquitetura() -> Question:
-    return Question(
-        prompt="Qual é a principal atividade?",
-        options={
-            "1": "Modelagem 3D",
-            "2": "Renderização",
-            "3": "CAD / BIM 2D",
-        },
-        next_step={
-            "1": q_orcamento,
-            "2": q_orcamento,
-            "3": q_orcamento,
-        },
-    )
-
-# Pergunta final de orçamento -------------------------------------------------
+# Pergunta final de orçamento ------------------------------------------------
 
 def q_orcamento() -> Question:
     return Question(
         prompt="Qual faixa de orçamento?",
         options={
             "1": "Até R$ 3.000",
-            "2": "R$ 3.001 – 4.000",
-            "3": "R$ 4.001 – 6.000",
+            "2": "R$ 3.001 - 4.000",
+            "3": "R$ 4.001 - 6.000",
             "4": "Acima de R$ 6.000",
         },
-        next_step={},  # termina o fluxo
+        next_step={},  # fim do fluxo
     )
 
-# Expor a primeira pergunta para integração com a UI --------------------------
-
-def build_flow() -> Question:
-    """Retorna a primeira pergunta do fluxo."""
-    return q_area_principal()
-
-# Geração simplificada de especificações --------------------------------------
+# Geração simplificada de specs ----------------------------------------------
 
 def gerar_specs(respostas: Dict[str, str]) -> Dict[str, str]:
-    """Mapeia respostas a requisitos mínimos."""
     specs = {
         "CPU": "Intel Core i5 / Ryzen 5",
         "RAM": "8 GB",
@@ -90,35 +50,13 @@ def gerar_specs(respostas: Dict[str, str]) -> Dict[str, str]:
         "GPU": "Integrada",
         "Tela": "14″ FHD",
     }
-
-    perfil = respostas.get("Para que você precisa de um notebook?")
-    if perfil == "Trabalho" and respostas.get("Qual área profissional?") == "Arquitetura":
-        atividade = respostas.get("Qual é a principal atividade?")
-        if atividade in {"Modelagem 3D", "Renderização"}:
-            specs.update({
-                "CPU": "Intel Core i7 / Ryzen 7",
-                "RAM": "16 GB",
-                "GPU": "Dedicada RTX 3050 ou equivalente",
-                "Armazenamento": "SSD 512 GB",
-                "Tela": "15″ FHD",
-            })
-        elif atividade == "CAD / BIM 2D":
-            specs.update({
-                "GPU": "Integrada ou dedicada de entrada",
-            })
-
     return specs
 
-# Execução direta (opcional, útil para teste rápido) --------------------------
+def build_flow() -> Question:
+    return q_area_categoria()
 
 if __name__ == "__main__":
     respostas = run(build_flow())
-
     print("\n=== Resumo das respostas ===")
     for pergunta, resposta in respostas.items():
         print(f"- {pergunta} → {resposta}")
-
-    specs = gerar_specs(respostas)
-    print("\n=== Especificações mínimas sugeridas ===")
-    for campo, valor in specs.items():
-        print(f"{campo}: {valor}")

@@ -119,9 +119,9 @@ def budget_bounds(budget_str: Optional[str]) -> Tuple[Optional[float], Optional[
     budget_str = budget_str.strip()
     if budget_str.startswith("Até"):
         return 0.0, 3000.0
-    if "3 001 – 4 000" in budget_str or "3 001 – 4 000" in budget_str:
+    if "3 001 - 4 000" in budget_str or "3 001 - 4 000" in budget_str:
         return 3001.0, 4000.0
-    if "4 001 – 6 000" in budget_str:
+    if "4 001 - 6 000" in budget_str:
         return 4001.0, 6000.0
     if "6 000 ou mais" in budget_str:
         return 6000.0, None

@@ -1,34 +1,16 @@
-# pip install kagglehub[pandas-datasets]
-import pandas as pd
-import kagglehub
-from kagglehub import KaggleDatasetAdapter
+# src/main.py
+from src.ui.cli_app import run_cli
+# no futuro: from ui.mobile_app import run_mobile
 
-# Configura o Pandas para exibir o conteúdo completo das colunas
-pd.set_option('display.max_colwidth', None)
+if __name__ == "__main__":
+    print("\n Iniciando NoteMatch (modo CLI)...")
+    run_cli()
+    # no futuro, basta trocar aqui para rodar a versão mobile
 
-# Define o caminho do arquivo que deseja carregar
-file_path = "laptop_price (1).csv"
 
-# Carrega o dataset usando o adaptador para Pandas, especificando a codificação correta
-df = kagglehub.load_dataset(
-    KaggleDatasetAdapter.PANDAS,
-    "durgeshrao9993/laptop-specification-dataset",
-    file_path,
-    pandas_kwargs={'encoding': 'latin1'}  # ou 'ISO-8859-1' se necessário
-)
+# professor, eu estou com uma duvida em sobre o meu projeto ser suficiente para um tcc, eu avançei bem esses dias, so que começou me dar 
+# essas duvidas, o senhor acha que o que tenho ate agora é suficiente para a banca?
+# basicamente o projeto esta estruturado como um assistente de recomendação que atraves de perguntas, ve o que o usuario utiliza, e cruza os dados com
+# a base de dados das especificações tecnicas, e com isso recomenda tres dispositivos, com base no preço e outros parametros.
 
-# Seleciona os 5 primeiros registros e os 5 últimos registros
-first_five = df.head()
-last_five = df.tail()
-# Combina esses dois subconjuntos em um único DataFrame
-partial_df = pd.concat([first_five, last_five])
-
-# Visualiza os registros selecionados
-print("Primeiros 5 e últimos 5 registros:")
-print(partial_df)
-
-# Gera um novo arquivo CSV contendo somente esses registros
-output_file = "laptop_specifications_partial.csv"
-partial_df.to_csv(output_file, index=False)
-
-print(f"Novo arquivo CSV gerado: {output_file}")
+# gostaria de ver com o sr. se é o bastante, ou que poderia implementar algo a mais.

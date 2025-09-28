@@ -59,7 +59,7 @@ pip install -r requirements.txt
 ## Executar (CLI)
 
 ```bash
-python -m src.ui.cli_app
+
 ```
 
 ## Executar (Flet – PWA)
