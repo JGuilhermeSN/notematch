@@ -59,14 +59,15 @@ pip install -r requirements.txt
 ## Executar (CLI)
 
 ```bash
-
+python -m src.ui.cli_app
 ```
 
 ## Executar (Flet – PWA)
 
 ```bash
 python -m src.ui.flet_app
-# abra http://localhost:8555 no navegador ou “Adicionar à tela inicial” no celular
+
+flet run --android -r main.py # rodar no android
 ```
 
 ## Testes

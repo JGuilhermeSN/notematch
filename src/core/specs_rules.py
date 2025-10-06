@@ -37,7 +37,7 @@ def infer_specs(answers: Dict[str, str]) -> Specs:
                      gpu_type="integrated", gpu_min_hint=None,
                      screen_min_width=1366, inches_min=13.3)
 
-    # Trabalho → especializações
+    # Trabalho -> especializações
     if area == "Trabalho":
         if prof == "Programação":
             return Specs(cpu_min="i5/Ryzen 5", ram_gb_min=16, ssd_min_gb=512,
