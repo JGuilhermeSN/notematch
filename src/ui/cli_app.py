@@ -1,105 +1,99 @@
 # src/ui/cli_app.py
-from pathlib import Path
-import pandas as pd
 import sys
+from typing import Any, Dict, List, Tuple
 
-from src.core.data_loader import load_notebooks_df
-from src.core.recommender import (
-    preprocess,
-    filter_by_specs,
-    rank_and_pick,  # mantém orquestrador fino
-    explain,
-)
-from src.core.specs_rules import infer_specs  # ou gerar_specs, conforme seu módulo
+from src.core.recommender_service import recommend_topk
 from src.core.questions import build_flow
 from src.core.engine import run
 
+# ----------------- helpers de formatação/segurança -----------------
 
-# taxa de conversão BRL por EUR (ajustar conforme necessário)
-FX_BRL_PER_EUR = 6.0
+def _fmt_brl(v: Any) -> str:
+    """Formata número em BRL; se não for numérico, retorna '—'."""
+    if isinstance(v, (int, float)):
+        return f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    return "—"
 
-
-def _fmt_brl(v) -> str:
+def _safe_get(d: Dict[str, Any], key: str, default: str = "—") -> Any:
     try:
-        return f"R$ {float(v):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        v = d.get(key)
+        return default if v in (None, "", "nan") else v
     except Exception:
-        return "—"
+        return default
 
+def _print_recommendations(recs: List[Dict[str, Any]]) -> None:
+    print("\n=== RECOMENDAÇÕES ===")
+    seen: set[Tuple[Any, Any, Any]] = set()  # evita repetidos pelo (nome, cpu, ram)
+    idx = 1
+    for r in recs:
+        key = (r.get("name"), r.get("cpu"), r.get("ram_gb"))
+        if key in seen:
+            continue
+        seen.add(key)
 
-def _fmt_eur(v) -> str:
+        name  = _safe_get(r, "name")
+        cpu   = _safe_get(r, "cpu")
+        ram   = _safe_get(r, "ram_gb")
+        gpu   = _safe_get(r, "gpu")
+        scr   = _safe_get(r, "screen")
+        price = _fmt_brl(r.get("price_brl"))
+
+        ram_txt = f"{ram}GB" if isinstance(ram, (int, float)) else str(ram)
+        print(f"{idx}. {name}  •  CPU: {cpu}  •  RAM: {ram_txt}  •  GPU: {gpu}  •  Tela: {scr}  •  {price}")
+
+        reasons = r.get("reasons") or []
+        if isinstance(reasons, str):
+            reasons = [reasons]
+
+        for mot in reasons:
+            print(f"   - {str(mot)}")
+        idx += 1
+    sys.stdout.flush()
+
+# ------------------------------- modos ------------------------------
+
+def _selftest() -> int:
+    """Roda um teste rápido, sem fluxo de perguntas, para validar o CLI."""
+    print("[+] Modo selftest: chamando recommend_topk com 3 cenários...", flush=True)
+    scenarios = [
+        {"Qual faixa de orçamento?": "1", "Dentro de Uso geral, o que melhor define?": "Jogos"},
+        {"Qual faixa de orçamento?": "4", "Dentro de Design e Criatividade, o que melhor define?": "Animador 3D"},
+        {"Qual faixa de orçamento?": "2", "Dentro de Tecnologia da Informação, o que melhor define?": "Cientista de Dados"},
+    ]
+    for i, ans in enumerate(scenarios, start=1):
+        print(f"\n[+] Cenário {i}: {ans}", flush=True)
+        recs = recommend_topk(ans, k=3)
+        _print_recommendations(recs)
+    print("\n[+] Selftest concluído.", flush=True)
+    return 0
+
+def run_cli() -> int:
     try:
-        return f"€ {float(v):,.2f}"
-    except Exception:
-        return "—"
+        # Modo diagnóstico opcional
+        if len(sys.argv) > 1 and sys.argv[1] == "--selftest":
+            return _selftest()
 
-
-def run_cli() -> None:
-    try:
+        print("[+] Iniciando fluxo de perguntas...", flush=True)
         # 1) Perguntas → respostas
         first_q = build_flow()
         answers = run(first_q)
+        print(f"[+] Respostas coletadas: {answers}", flush=True)
 
-        # 2) Respostas → especificações mínimas
-        specs = infer_specs(answers)  # ou gerar_specs(answers)
+        # 2) Recomendações (top-k)
+        print("[+] Gerando recomendações...", flush=True)
+        topk = recommend_topk(answers, k=3)
 
-        # 3) Carrega a base: usa cache se existir, senão baixa do Kaggle e cria cache
-        df = load_notebooks_df(file_path_kaggle="laptop_price (1).csv", encoding="latin1")
-        dfp = preprocess(df)
-
-        # 4) Filtra por especificações
-        candidates = filter_by_specs(dfp, specs)
-
-        # 5) Top K (com orçamento em BRL convertido internamente para EUR)
-        budget = answers.get("Qual faixa de orçamento?")
-        topk = rank_and_pick(
-            candidates,
-            budget,
-            k=3,
-            fx_brl_per_eur=FX_BRL_PER_EUR,  # importante!
-        )
-
-        print("\n=== Especificações mínimas recomendadas ===")
-        print(specs)
-
-        print("\n=== Top notebooks compatíveis (base de dados) ===")
-        if topk.empty:
-            print("Nenhum modelo encontrado com esses critérios.")
-            return
-
-        # Exibição amigável: formata BRL/EUR se presentes
-        df_show = topk.copy()
-        if "Price_in_brl" in df_show.columns:
-            df_show["Price_in_brl"] = df_show["Price_in_brl"].map(_fmt_brl)
-        if "Price_in_euros" in df_show.columns:
-            df_show["Price_in_euros"] = df_show["Price_in_euros"].map(_fmt_eur)
-
-        print(df_show.to_string(index=False))
-
-        # 6) Explicações por item
-        print("\n--- Explicações por item ---")
-        for idx in topk.index:
-            # Recupera a linha COMPLETA (com colunas engenheiradas) a partir de candidates
-            # (rank_and_pick preserva o índice original, então funciona com loc)
-            try:
-                full_row = candidates.loc[idx]
-            except KeyError:
-                # fallback: tenta com dfp (caso candidates tenha sido reindexado em algum ponto)
-                full_row = dfp.loc[idx] if idx in dfp.index else topk.loc[idx]
-
-            try:
-                msg = explain(full_row, specs)
-            except Exception as e:
-                msg = f"Explicação indisponível ({e})"
-
-            ident = f"{full_row.get('Company', '?')} {full_row.get('Product', '?')}"
-            price_brl = topk.loc[idx].get("Price_in_brl", None)
-            price_brl_txt = _fmt_brl(price_brl) if price_brl is not None else "—"
-            print(f"* {ident} ({price_brl_txt}): {msg}")
+        # 3) Impressão amigável
+        _print_recommendations(topk)
+        return 0
 
     except KeyboardInterrupt:
         print("\nExecução interrompida pelo usuário.")
-        sys.exit(1)
-
+        return 1
+    except Exception as e:
+        # imprime erro no stdout também para aparecer no PowerShell
+        print(f"[ERRO] {e}")
+        return 2
 
 if __name__ == "__main__":
-    run_cli()
+    sys.exit(run_cli())

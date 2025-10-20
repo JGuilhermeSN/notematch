@@ -1,69 +1,77 @@
 # src/core/specs_rules.py
-from dataclasses import dataclass
-from typing import Dict, Optional
+from __future__ import annotations
+from typing import Dict, Any, Mapping
+import unicodedata
 
-@dataclass
-class Specs:
-    cpu_min: str         # ex.: "i5" | "i7" | "Ryzen 5" | "Ryzen 7"
-    ram_gb_min: int      # ex.: 8, 16
-    ssd_min_gb: int      # ex.: 256, 512
-    gpu_type: str        # "integrated" | "dedicated"
-    gpu_min_hint: Optional[str] = None  # ex.: "RTX 3050"
-    screen_min_width: int = 1920        # ex.: 1920 para FHD
-    inches_min: float = 14.0            # tamanho mínimo, se quiser forçar algo
+def _norm(s: str) -> str:
+    if not s:
+        return ""
+    s = s.lower()
+    s = unicodedata.normalize("NFKD", s)
+    return "".join(ch for ch in s if not unicodedata.combining(ch))
 
-def infer_specs(answers: Dict[str, str]) -> Specs:
-    """Converte respostas do questionário em especificações mínimas."""
-    area = answers.get("Para que você precisa de um notebook?")
-    prof = answers.get("Qual área profissional?")
-    atividade = answers.get("Qual é a principal atividade?")
-    # orçamento pode ser usado apenas para filtragem, não para specs
-    # budget = answers.get("Qual faixa de orçamento?")
+def _answers_text(answers: Mapping[str, object]) -> str:
+    return " ".join(_norm(str(v)) for v in answers.values())
 
-    # Defaults conservadores
-    specs = Specs(cpu_min="i5/Ryzen 5", ram_gb_min=8, ssd_min_gb=256,
-                  gpu_type="integrated", gpu_min_hint=None,
-                  screen_min_width=1366, inches_min=13.3)
+def _has_any(text: str, kws: list[str]) -> bool:
+    return any(kw in text for kw in kws)
 
-    # Jogos
-    if area == "Jogos":
-        return Specs(cpu_min="i5/Ryzen 5", ram_gb_min=16, ssd_min_gb=512,
-                     gpu_type="dedicated", gpu_min_hint="GTX 1650/RTX 3050",
-                     screen_min_width=1920, inches_min=15.0)
+def _rules_for_use(text: str) -> Dict[str, Any]:
+    # Palavras-chave (sem acento)
+    kw_prog    = ["programacao", "desenvolvedor", "dev", "ide", "backend", "frontend", "fullstack", "python", "java", "node", "c#", "c++", "golang"]
+    kw_dados   = ["dados", "data science", "cientista de dados", "etl", "sql", "spark", "power bi"]
+    kw_ml      = ["machine learning", "deep learning", "pytorch", "tensorflow", "treinar", "cuda"]
+    kw_design  = ["design", "criacao", "photoshop", "illustrator", "figma", "ux", "ui", "lightroom"]
+    kw_video   = ["edicao de video", "premiere", "after effects", "davinci", "render", "timeline", "color"]
+    kw_3d      = ["3d", "modelagem", "blender", "maya", "3ds", "vray", "arnold", "zbrush"]
+    kw_cad     = ["autocad", "revit", "bim", "solidworks", "catia", "inventor", "engenharia", "arquitetura"]
+    kw_games   = ["jogos", "gaming", "gamer", "steam", "fps", "valorant", "fortnite", "lol"]
+    kw_leve    = ["navegacao", "pesquisa", "office", "word", "excel", "powerpoint", "aulas", "estudos", "ead"]
+    kw_neg     = ["negocios", "erp", "gestao", "crm", "apresentacoes"]
 
-    # Estudo e Navegação
-    if area in {"Navegação / Uso básico", "Estudo"}:
-        return Specs(cpu_min="i3/Ryzen 3", ram_gb_min=8, ssd_min_gb=256,
-                     gpu_type="integrated", gpu_min_hint=None,
-                     screen_min_width=1366, inches_min=13.3)
+    needs_gpu = False
+    min_cpu_tier = 5   # i5/R5 base
+    min_ram = 8
 
-    # Trabalho -> especializações
-    if area == "Trabalho":
-        if prof == "Programação":
-            return Specs(cpu_min="i5/Ryzen 5", ram_gb_min=16, ssd_min_gb=512,
-                         gpu_type="integrated", gpu_min_hint=None,
-                         screen_min_width=1920, inches_min=14.0)
+    # Pesados que exigem GPU
+    if _has_any(text, kw_games) or _has_any(text, kw_3d) or _has_any(text, kw_video) or _has_any(text, kw_cad):
+        needs_gpu = True
+        min_cpu_tier = 7
+        min_ram = 16
+    elif _has_any(text, kw_design):
+        needs_gpu = True
+        min_cpu_tier = 5
+        min_ram = 16
 
-        if prof == "Design Gráfico":
-            return Specs(cpu_min="i5/Ryzen 5", ram_gb_min=16, ssd_min_gb=512,
-                         gpu_type="dedicated", gpu_min_hint="GTX 1650/RTX 3050",
-                         screen_min_width=1920, inches_min=15.0)
+    # Programação
+    if _has_any(text, kw_prog):
+        if _has_any(text, kw_ml):
+            needs_gpu = True
+            min_cpu_tier = max(min_cpu_tier, 7)
+            min_ram = max(min_ram, 16)
+        else:
+            min_cpu_tier = max(min_cpu_tier, 5)
+            min_ram = max(min_ram, 16)
 
-        if prof == "Engenharia":
-            return Specs(cpu_min="i5/Ryzen 5", ram_gb_min=16, ssd_min_gb=512,
-                         gpu_type="integrated", gpu_min_hint=None,
-                         screen_min_width=1920, inches_min=14.0)
+    # Dados/analítica
+    if _has_any(text, kw_dados):
+        min_cpu_tier = max(min_cpu_tier, 5)
+        min_ram = max(min_ram, 16)
 
-        if prof == "Arquitetura":
-            # A atividade define a GPU
-            if atividade in {"Modelagem 3D", "Renderização"}:
-                return Specs(cpu_min="i7/Ryzen 7", ram_gb_min=16, ssd_min_gb=512,
-                             gpu_type="dedicated", gpu_min_hint="RTX 3050",
-                             screen_min_width=1920, inches_min=15.0)
-            if atividade == "CAD / BIM 2D":
-                return Specs(cpu_min="i5/Ryzen 5", ram_gb_min=16, ssd_min_gb=512,
-                             gpu_type="integrated", gpu_min_hint=None,
-                             screen_min_width=1920, inches_min=15.0)
+    # Uso leve/negócios
+    if _has_any(text, kw_leve) or _has_any(text, kw_neg):
+        min_cpu_tier = max(min_cpu_tier, 3)
+        min_ram = max(min_ram, 8)
 
-    # fallback
-    return specs
+    return {
+        "min_ram_gb": int(min_ram),
+        "min_cpu_tier": int(min_cpu_tier),
+        "needs_dedicated_gpu": bool(needs_gpu),
+    }
+
+def infer_specs(answers: Mapping[str, object]) -> Dict[str, Any]:
+    text = _answers_text(answers)
+    rules = _rules_for_use(text)
+    if not rules or rules.get("min_ram_gb", 0) == 0:
+        rules = {"min_ram_gb": 8, "min_cpu_tier": 4, "needs_dedicated_gpu": False}
+    return rules

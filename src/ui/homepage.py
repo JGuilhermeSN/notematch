@@ -15,7 +15,7 @@ def homepage_view(page: ft.Page) -> ft.View:
                 ft.Text("NoteMatch", size=48, weight=ft.FontWeight.BOLD, color="WHITE70"),
                 ft.Text("Seu assistente para o notebook ideal", size=18, color="WHITE70"),
                 ft.ElevatedButton("Começar", on_click=lambda _: page.go("/questions"), width=200),
-                ft.ElevatedButton("teste/resultado", on_click=lambda _: page.go("/results"), width=200),
+                #ft.ElevatedButton("teste/resultado", on_click=lambda _: page.go("/results"), width=200),
             ],
         ),
     )
