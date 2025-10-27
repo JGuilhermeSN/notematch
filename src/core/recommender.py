@@ -25,7 +25,6 @@ def load_dataset() -> List[Dict[str, Any]]:
     Carregue seu dataset aqui. Exemplo com CSV -> dicts.
     Ajuste os nomes das colunas conforme seu dataset.
     """
-    # return read_csv_as_dicts("data/laptops.csv")
     raise NotImplementedError("Conecte aqui o carregamento real do dataset")
 
 def filter_and_rank(rows: List[Dict[str, Any]], specs: Dict[str, Any]) -> List[Dict[str, Any]]:

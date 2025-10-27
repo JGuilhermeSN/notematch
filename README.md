@@ -17,25 +17,7 @@ O **NoteMatch** é um assistente que recomenda notebooks de acordo com as necess
 * Classificação por orçamento (≤ R\$ 3 000 · 3 001–4 000 · 4 001–6 000 · ≥ 6 000).
 * Módulo central desacoplado (`core/`) — fácil manutenção e testes.
 
-## Estrutura do Repositório
 
-```
-notematch/
-├─ src/
-│  ├─ core/
-│  │  ├─ question_engine.py   # fluxo de perguntas
-│  │  ├─ specs_rules.py       # regras → especificações mínimas
-│  │  └─ __init__.py
-│  ├─ ui/
-│  │  ├─ cli_app.py           # interface de linha de comando
-│  │  ├─ flet_app.py          # interface mobile/desktop
-│  │  └─ __init__.py
-│  └─ main.py                # ponto de entrada
-├─ data/
-│  └─ base_dados.csv
-├─ requirements.txt
-└─ README.md
-```
 
 ## Requisitos
 
@@ -65,8 +47,6 @@ python -m src.ui.cli_app
 ## Executar (Flet – PWA)
 
 ```bash
-python -m src.ui.flet_app
-
 flet run --android -r main.py # rodar no android
 ```
 

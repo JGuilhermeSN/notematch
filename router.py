@@ -11,11 +11,12 @@ def handle_route_change(page: ft.Page):
     tr = TemplateRoute(page.route)
     page.views.clear()
     page.views.append(homepage_view(page))
-    if tr.match("/questions") or tr.match("/results") or tr.match("/details"):
+
+    if tr.match("/questions"):
         page.views.append(questions_view(page))
-    if tr.match("/results"):
+    elif tr.match("/results"):
         page.views.append(results_view(page))
-    if tr.match("/details"):
+    elif tr.match("/details"):
         page.views.append(details_view(page))
 
     page.update()

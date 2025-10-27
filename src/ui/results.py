@@ -1,45 +1,108 @@
+# src/ui/results.py
+from __future__ import annotations
+
 import flet as ft
 from typing import List, Dict, Any
+
 from src.ui.quiz_controller import quiz
 from src.core.recommender_service import recommend_topk
 from src.ui.app_state import set_selected
 
-def _rating_row(value: float) -> ft.Row:
-    full = int(value)
-    half = 1 if value - full >= 0.5 else 0
-    empty = 5 - full - half
-    icons = []
+
+def _rating_row(value: float | int | None) -> ft.Control:
+    """Renderiza as estrelas. Quando 0/None, não exibe nada."""
+    try:
+        v = float(value or 0)
+    except Exception:
+        v = 0.0
+
+    if v <= 0:
+        return ft.Container()  # não mostra nada
+
+    full = int(v)
+    half = 1 if v - full >= 0.5 else 0
+    empty = max(0, 5 - full - half)
+
+    icons: List[ft.Control] = []
     for _ in range(full):
         icons.append(ft.Icon(ft.Icons.STAR, size=18))
     if half:
         icons.append(ft.Icon(ft.Icons.STAR_HALF, size=18))
     for _ in range(empty):
-        icons.append(ft.Icon(ft.Icons.STAR_BORDER, size=18))
-    return ft.Row(icons, spacing=0)
+        icons.append(ft.Icon(ft.Icons.STAR_OUTLINE, size=18))
 
-def _spec_chip(text: str) -> ft.Container:
+    return ft.Row(icons, spacing=2)
+
+
+def _spec_chip(text: str | None) -> ft.Control | None:
+    """Cria um chip simples; retorna None se vazio para poder filtrar."""
+    s = (text or "").strip()
+    if not s:
+        return None
     return ft.Container(
         bgcolor=ft.Colors.with_opacity(0.08, ft.Colors.WHITE),
         padding=ft.padding.symmetric(6, 10),
         border_radius=999,
-        content=ft.Text(text, size=12),
+        content=ft.Text(s, size=12),
     )
 
+
+def _format_price_brl(v: Any) -> str:
+    try:
+        f = float(v or 0)
+    except Exception:
+        f = 0.0
+    # formata como BRL sem depender de locale
+    return f"R$ {f:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
 def _product_card(page: ft.Page, p: Dict[str, Any]) -> ft.Card:
-    chips = ft.ResponsiveRow(
-        controls=[
-            ft.Column(col=3, controls=[_spec_chip(p.get("cpu", ""))]),
-            ft.Column(col=3, controls=[_spec_chip(f'{p.get("ram_gb", "-")}GB RAM')]),
-            ft.Column(col=3, controls=[_spec_chip(p.get("storage", ""))]),
-            ft.Column(col=3, controls=[_spec_chip(p.get("gpu", ""))]),
-            ft.Column(col=3, controls=[_spec_chip(p.get("screen", ""))]),
-        ]
-)
+    # monta chips, ignorando Nones
+    chips_controls: List[ft.Control] = []
+    # cpu
+    cpu_chip = _spec_chip(p.get("cpu", ""))
+    if cpu_chip:
+        chips_controls.append(cpu_chip)
+    # ram
+    ram_val = p.get("ram_gb", None)
+    ram_chip = _spec_chip(f"{ram_val}GB RAM" if ram_val not in (None, "", "-") else "")
+    if ram_chip:
+        chips_controls.append(ram_chip)
+    # storage (pode não existir)
+    storage_chip = _spec_chip(p.get("storage", ""))
+    if storage_chip:
+        chips_controls.append(storage_chip)
+    # gpu
+    gpu_chip = _spec_chip(p.get("gpu", ""))
+    if gpu_chip:
+        chips_controls.append(gpu_chip)
+    # tela
+    screen_chip = _spec_chip(p.get("screen", ""))
+    if screen_chip:
+        chips_controls.append(screen_chip)
 
+    chips_row = (
+        ft.Row(wrap=True, spacing=8, run_spacing=8, controls=chips_controls)
+        if chips_controls
+        else ft.Container()
+    )
 
+    reasons: List[str] = []
+    try:
+        rr = p.get("reasons", []) or []
+        if isinstance(rr, list):
+            reasons = [str(x) for x in rr][:3]
+        elif isinstance(rr, str):
+            # caso raro: reasons venha como string única
+            reasons = [rr]
+    except Exception:
+        reasons = []
 
-    reasons = p.get("reasons", [])[:3]
-    reasons_list = ft.Column([ft.Text(f"• {r}", size=12, opacity=0.85) for r in reasons], spacing=2)
+    reasons_list = (
+        ft.Column([ft.Text(f"• {r}", size=12, opacity=0.85) for r in reasons], spacing=2)
+        if reasons
+        else ft.Container()
+    )
 
     def open_details(_):
         set_selected(p)
@@ -52,35 +115,52 @@ def _product_card(page: ft.Page, p: Dict[str, Any]) -> ft.Card:
             padding=16,
             content=ft.Column(
                 [
-                    ft.Row([
-                            ft.Text(p["name"], size=18, weight=ft.FontWeight.W_600),
-                            ft.Container(expand=True),
-                            _rating_row(float(p.get("rating", 0))),
-                        ],
-                        alignment=ft.MainAxisAlignment.START,
-                    ),
-                    ft.Row([chips]),
                     ft.Row(
                         [
                             ft.Text(
-                                f'R$ {p.get("price_brl", 0):,.2f}'.replace(",", "X").replace(".", ",").replace("X", "."),
-                                size=16, weight=ft.FontWeight.W_600,
+                                str(p.get("name", "—")),
+                                size=18,
+                                weight=ft.FontWeight.W_600,
+                                no_wrap=True,
+                                expand=False,
+                            ),
+                            ft.Container(expand=True),
+                            _rating_row(p.get("rating", 0)),
+                        ],
+                        alignment=ft.MainAxisAlignment.START,
+                    ),
+                    chips_row,
+                    ft.Row(
+                        [
+                            ft.Text(
+                                _format_price_brl(p.get("price_brl", 0)),
+                                size=16,
+                                weight=ft.FontWeight.W_600,
                             ),
                             ft.Container(expand=True),
                             ft.ElevatedButton("Detalhes", on_click=open_details),
                         ]
                     ),
                     ft.Container(height=6),
-                    reasons_list if reasons else ft.Container(),
+                    reasons_list,
                 ],
                 spacing=10,
             ),
         ),
     )
 
+
 def results_view(page: ft.Page) -> ft.View:
-    recs: List[Dict[str, Any]] = recommend_topk(quiz.answers, k=3)
-    
+    # tenta recomendar; mantém app vivo mesmo em caso de erro
+    recs: List[Dict[str, Any]] = []
+    error_text: str | None = None
+    try:
+        recs = recommend_topk(quiz.answers, k=3)
+        if not isinstance(recs, list):
+            recs = []
+    except Exception as e:
+        error_text = f"Falha ao gerar recomendações: {e}"
+
     header = ft.Row(
         [
             ft.Text("Resultados", size=22, weight=ft.FontWeight.W_600),
@@ -90,14 +170,23 @@ def results_view(page: ft.Page) -> ft.View:
         ]
     )
 
-    cards = [_product_card(page, p) for p in recs]
+    cards: List[ft.Control] = []
+    if recs:
+        cards = [_product_card(page, p) for p in recs if isinstance(p, dict)]
+
+    content_controls: List[ft.Control] = [header, ft.Text("Top 3 recomendados para você:", size=14, opacity=0.85)]
+    if error_text:
+        content_controls.append(
+            ft.Text(error_text, color=ft.Colors.RED_400, size=13, selectable=True)
+        )
+
+    if cards:
+        content_controls.extend(cards)
+    else:
+        content_controls.append(ft.Text("Nenhuma recomendação encontrada.", size=14))
 
     body = ft.Column(
-        controls=[
-            header,
-            ft.Text("Top 3 recomendados para você:", size=14, opacity=0.85),
-            *(cards if cards else [ft.Text("Nenhuma recomendação encontrada.", size=14)]),
-        ],
+        controls=content_controls,
         spacing=14,
         expand=True,
     )
