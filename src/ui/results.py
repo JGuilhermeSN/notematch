@@ -7,6 +7,7 @@ from typing import List, Dict, Any
 from src.ui.quiz_controller import quiz
 from src.core.recommender_service import recommend_topk
 from src.ui.app_state import set_selected
+from src.ui.explain_widget import explain_panel  # <-- (novo) painel de explicação
 
 
 def _rating_row(value: float | int | None) -> ft.Control:
@@ -54,6 +55,27 @@ def _format_price_brl(v: Any) -> str:
         f = 0.0
     # formata como BRL sem depender de locale
     return f"R$ {f:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def _fallback_chip(p: Dict[str, Any]) -> ft.Control:
+    """Exibe um chip 'fallback Lx' quando houver relaxação."""
+    relax = (p.get("explain") or {}).get("relaxation")
+    if not relax:
+        return ft.Container()
+    level = relax.get("level", 0)
+    return ft.Container(
+        bgcolor=ft.Colors.with_opacity(0.10, ft.Colors.AMBER),
+        padding=ft.padding.symmetric(4, 8),
+        border_radius=999,
+        content=ft.Row(
+            spacing=6,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            controls=[
+                ft.Icon(ft.Icons.TUNE, size=14),
+                ft.Text(f"fallback L{level}", size=12),
+            ],
+        ),
+    )
 
 
 def _product_card(page: ft.Page, p: Dict[str, Any]) -> ft.Card:
@@ -104,6 +126,26 @@ def _product_card(page: ft.Page, p: Dict[str, Any]) -> ft.Card:
         else ft.Container()
     )
 
+    # ---------- Diálogo "Por que este?" ----------
+    explain_data = p.get("explain") or {}
+    dlg = ft.AlertDialog(
+        modal=True,
+        content=ft.Container(
+            content=explain_panel(explain_data),
+            width=560,
+            padding=10,
+        ),
+        actions=[ft.TextButton("Fechar", on_click=lambda e: setattr(dlg, "open", False))],
+        actions_alignment=ft.MainAxisAlignment.END,
+    )
+
+    if dlg not in page.overlay:
+        page.overlay.append(dlg)
+
+    def open_explain(_):
+        dlg.open = True
+        page.update()
+
     def open_details(_):
         set_selected(p)
         page.go("/details")
@@ -125,7 +167,7 @@ def _product_card(page: ft.Page, p: Dict[str, Any]) -> ft.Card:
                                 expand=False,
                             ),
                             ft.Container(expand=True),
-                            _rating_row(p.get("rating", 0)),
+                            _fallback_chip(p),  # chip de fallback (quando houver)
                         ],
                         alignment=ft.MainAxisAlignment.START,
                     ),
@@ -138,8 +180,10 @@ def _product_card(page: ft.Page, p: Dict[str, Any]) -> ft.Card:
                                 weight=ft.FontWeight.W_600,
                             ),
                             ft.Container(expand=True),
+                            ft.TextButton("Por que este?", on_click=open_explain),
                             ft.ElevatedButton("Detalhes", on_click=open_details),
-                        ]
+                        ],
+                        alignment=ft.MainAxisAlignment.END,
                     ),
                     ft.Container(height=6),
                     reasons_list,
@@ -174,7 +218,10 @@ def results_view(page: ft.Page) -> ft.View:
     if recs:
         cards = [_product_card(page, p) for p in recs if isinstance(p, dict)]
 
-    content_controls: List[ft.Control] = [header, ft.Text("Top 3 recomendados para você:", size=14, opacity=0.85)]
+    content_controls: List[ft.Control] = [
+        header,
+        ft.Text("Top 3 recomendados para você:", size=14, opacity=0.85),
+    ]
     if error_text:
         content_controls.append(
             ft.Text(error_text, color=ft.Colors.RED_400, size=13, selectable=True)
