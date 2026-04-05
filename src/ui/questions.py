@@ -60,5 +60,5 @@ def questions_view(page: ft.Page) -> ft.View:
     return ft.View(
         route="/questions",
         appbar=ft.AppBar(title=ft.Text("Questionário")),
-        controls=[ft.Container(expand=True, alignment=ft.alignment.center, content=content)],
+        controls=[ft.Container(expand=True, alignment=ft.Alignment.CENTER, content=content)],
     )

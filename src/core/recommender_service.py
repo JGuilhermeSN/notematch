@@ -8,7 +8,7 @@ from src.core.data_loader import load_notebooks
 from src.core.models import Notebook
 from src.core.specs_rules import infer_specs
 
-EUR_TO_BRL = 6.0  # mantenha sincronizado com README
+EUR_TO_BRL = 6.0  # taxa de câmbio - converte Euro em Real
 
 # -----------------------------
 # Helpers de normalização/tiers
@@ -39,10 +39,44 @@ def _safe_brl(price_eur: float) -> Optional[int]:
         return None
     return int(round(price_eur * EUR_TO_BRL))
 
+# -----------------------------
+# Elegibilidade (mínimos = mínimos)
+# -----------------------------
+def _is_eligible(nb: Notebook, rules: Dict[str, Any]) -> bool:
+    """Hard-filter: remove itens que NÃO atendem os mínimos do perfil (L0/L1)."""
+    # RAM é essencial (se faltou ou ficou abaixo, sai)
+    if nb.ram_gb is None or nb.ram_gb <= 0:
+        return False
+    if nb.ram_gb < int(rules.get("min_ram_gb", 8) or 8):
+        return False
+
+    # CPU é essencial (se faltou ou não atingiu o tier, sai)
+    if not (nb.cpu or "").strip():
+        return False
+    if _cpu_tier(nb.cpu) < int(rules.get("min_cpu_tier", 3) or 3):
+        return False
+
+    # GPU dedicada: só exigir quando o perfil pede explicitamente
+    if bool(rules.get("needs_dedicated_gpu", False)):
+        if not _has_dedicated_gpu(nb.gpu):
+            return False
+
+    # Orçamento também é "hard" quando houver teto/piso (senão distorce o top-3)
+    price_brl = _safe_brl(nb.price_eur)
+    teto = rules.get("budget_brl")
+    piso = rules.get("budget_floor_brl")
+
+    if teto and (price_brl is not None) and price_brl > float(teto):
+        return False
+    if piso and (price_brl is not None) and price_brl < float(piso):
+        return False
+
+    return True
+
 # -----------------------------------
 # Score com breakdown (explicabilidade)
 # -----------------------------------
-def _score(nb: Notebook, rules: Dict[str, Any], budget_brl: Optional[float]) -> Tuple[float, List[str], Optional[int], List[Dict[str, Any]]]:
+def _score(nb: Notebook, rules: Dict[str, Any], budget_brl: Optional[float], budget_floor_brl: Optional[float] = None) -> Tuple[float, List[str], Optional[int], List[Dict[str, Any]]]:
     """
     Retorna:
       score: float
@@ -83,22 +117,40 @@ def _score(nb: Notebook, rules: Dict[str, Any], budget_brl: Optional[float]) -> 
             score_parts.append({"crit": "GPU", "delta": +0.5, "why": "Dedicada opcional (melhora desempenho gráfico)"})
 
 
-    # Orçamento
+    # Orçamento (teto e/ou piso)
     price_brl = _safe_brl(nb.price_eur)
-    if budget_brl:
-        if price_brl is not None and price_brl <= budget_brl:
-            # quanto mais próximo do teto, mais ponto (sem exagero)
-            proximity = 1.0 - (budget_brl - price_brl) / max(budget_brl, 1)
-            proximity = max(0.0, min(1.0, proximity))
-            score += proximity
-            score_parts.append({"crit": "Preço", "delta": +proximity, "why": "Dentro do orçamento"})
-            reasons.append(f"Preço dentro do orçamento (≈ R$ {price_brl:,})".replace(",", "."))
-        elif price_brl is not None and price_brl > budget_brl:
-            over = (price_brl - budget_brl) / budget_brl
-            penal = min(1.5, over)
-            score -= penal
-            score_parts.append({"crit": "Preço", "delta": -penal, "why": "Acima do orçamento"})
-            reasons.append(f"Acima do orçamento (≈ R$ {price_brl:,})".replace(",", "."))
+
+    budget_ceiling = budget_brl
+    budget_floor = budget_floor_brl if budget_floor_brl else rules.get("budget_floor_brl")
+
+    if (budget_ceiling or budget_floor) and price_brl is not None:
+        # --- teto (faixas "até" / "x - y")
+        if budget_ceiling:
+            if price_brl <= budget_ceiling:
+                # quanto mais próximo do teto, mais ponto (sem exagero)
+                proximity = 1.0 - (budget_ceiling - price_brl) / max(budget_ceiling, 1)
+                proximity = max(0.0, min(1.0, proximity))
+                score += proximity
+                score_parts.append({"crit": "Preço (teto)", "delta": +proximity, "why": "Dentro do orçamento"})
+                reasons.append(f"Preço dentro do orçamento (≈ R$ {price_brl:,})".replace(",", "."))
+            else:
+                over = (price_brl - budget_ceiling) / max(budget_ceiling, 1)
+                penal = min(1.5, over)
+                score -= penal
+                score_parts.append({"crit": "Preço (teto)", "delta": -penal, "why": "Acima do orçamento"})
+                reasons.append(f"Acima do orçamento (≈ R$ {price_brl:,})".replace(",", "."))
+
+        # --- piso (opção "Acima de R$ ...")
+        if budget_floor:
+            if price_brl < budget_floor:
+                under = (budget_floor - price_brl) / max(budget_floor, 1)
+                penal = min(1.0, under)
+                score -= penal
+                score_parts.append({"crit": "Preço (piso)", "delta": -penal, "why": "Abaixo do piso do orçamento"})
+            else:
+                bonus = 0.25
+                score += bonus
+                score_parts.append({"crit": "Preço (piso)", "delta": +bonus, "why": "Atende o piso do orçamento"})
 
     return score, reasons, price_brl, score_parts
 
@@ -192,15 +244,26 @@ def _build_explanation_dict(
             "status": "atingido",
         })
     # Preço
-    if policy_after.get("budget_brl"):
-        pr = nb_dict.get("price_brl")
-        budget = policy_after.get("budget_brl")
+    pr = nb_dict.get("price_brl")
+    teto = policy_after.get("budget_brl")
+    piso = policy_after.get("budget_floor_brl")
+
+    if piso:
         compliance.append({
-            "crit": "Preço",
-            "max": budget,
+            "crit": "Preço (piso)",
+            "min": piso,
             "val": pr,
-            "status": "abaixo_teto" if (isinstance(pr, (int, float)) and isinstance(budget, (int, float)) and pr <= budget) else "acima",
+            "status": "atingido" if (isinstance(pr, (int, float)) and pr >= piso) else "abaixo",
         })
+
+    if teto:
+        compliance.append({
+            "crit": "Preço (teto)",
+            "max": teto,
+            "val": pr,
+            "status": "abaixo_teto" if (isinstance(pr, (int, float)) and pr <= teto) else "acima",
+        })
+
 
     explain = {
         "policy": {
@@ -208,6 +271,7 @@ def _build_explanation_dict(
             "min_cpu_tier": policy_after.get("min_cpu_tier"),
             "needs_dedicated_gpu": policy_after.get("needs_dedicated_gpu"),
             "budget_brl": policy_after.get("budget_brl"),
+            "budget_floor_brl": policy_after.get("budget_floor_brl"),
         },
         "compliance": compliance,
         "score_breakdown": score_parts,   # [{crit, delta, why}]
@@ -233,13 +297,21 @@ def recommend_topk(answers: Mapping[str, Any], k: int = 3) -> List[Dict[str, Any
         "min_cpu_tier": int(rules.get("min_cpu_tier", 3) or 3),
         "needs_dedicated_gpu": bool(rules.get("needs_dedicated_gpu", False)),
         "budget_brl": float(budget_brl) if budget_brl else None,
+        "budget_floor_brl": float(rules.get("budget_floor_brl")) if rules.get("budget_floor_brl") else None,
     }
 
     # 2) Scoring em L0 (sem relax)
     notebooks = load_notebooks()
     scored: List[Tuple[float, Notebook, List[str], Optional[int], List[Dict[str, Any]]]] = []
     for nb in notebooks:
-        s, reasons, price_brl, score_parts = _score(nb, base_rules, base_rules["budget_brl"])
+        if not _is_eligible(nb, base_rules):
+            continue
+        s, reasons, price_brl, score_parts = _score(
+            nb,
+            base_rules,
+            base_rules["budget_brl"],
+            base_rules.get("budget_floor_brl"),
+        )
         scored.append((s, nb, reasons, price_brl, score_parts))
 
     scored.sort(key=lambda t: (-t[0], t[3] if t[3] is not None else math.inf))
@@ -267,11 +339,42 @@ def recommend_topk(answers: Mapping[str, Any], k: int = 3) -> List[Dict[str, Any
 
         scored = []
         for nb in notebooks:
-            s, reasons, price_brl, score_parts = _score(nb, relaxed, relaxed["budget_brl"])
-            reasons.append("Relaxação de critérios")  # auditável
+            if not _is_eligible(nb, relaxed):
+                continue
+            s, reasons, price_brl, score_parts = _score(
+                nb,
+                relaxed,
+                relaxed["budget_brl"],
+                relaxed.get("budget_floor_brl"),
+            )
             scored.append((s, nb, reasons, price_brl, score_parts))
 
         scored.sort(key=lambda t: (-t[0], t[3] if t[3] is not None else math.inf))
+
+        # Se ainda não houver candidatos, relaxa CPU também (fallback L2)
+        if not top_scored:
+            fallback_level = 2
+            old_cpu = relaxed["min_cpu_tier"]
+            relaxed["min_cpu_tier"] = max(3, int(old_cpu) - 4)
+
+            if old_cpu != relaxed["min_cpu_tier"]:
+                diffs.append({"param": "min_cpu_tier", "from": old_cpu, "to": relaxed["min_cpu_tier"], "why": "fallback L2"})
+
+            scored = []
+            for nb in notebooks:
+                if not _is_eligible(nb, relaxed):
+                    continue
+                s, reasons, price_brl, score_parts = _score(
+                    nb,
+                    relaxed,
+                    relaxed["budget_brl"],
+                    relaxed.get("budget_floor_brl"),
+                )
+                reasons.append("Relaxação de critérios (CPU)")  # auditável
+                scored.append((s, nb, reasons, price_brl, score_parts))
+
+            scored.sort(key=lambda t: (-t[0], t[3] if t[3] is not None else math.inf))
+            top_scored = _diversify_topk(scored, k)
         top_scored = _diversify_topk(scored, k)
 
     # 4) Montagem dos resultados com EXPLICAÇÃO

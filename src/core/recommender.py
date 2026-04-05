@@ -18,14 +18,10 @@ def _gpu_ok(gpu_name: str, gpu_required: bool) -> bool:
     if not gpu_required:
         return True
     name = (gpu_name or "").lower()
-    return any(x in name for x in ["rtx", "gtx", "radeon", "arc"])
+    return any(x in name for x in ["rtx", "gtx", "radeon", "arc", "rx"])
 
 def load_dataset() -> List[Dict[str, Any]]:
-    """
-    Carregue seu dataset aqui. Exemplo com CSV -> dicts.
-    Ajuste os nomes das colunas conforme seu dataset.
-    """
-    raise NotImplementedError("Conecte aqui o carregamento real do dataset")
+       raise NotImplementedError("sem conexao com o dataset")
 
 def filter_and_rank(rows: List[Dict[str, Any]], specs: Dict[str, Any]) -> List[Dict[str, Any]]:
     out = []

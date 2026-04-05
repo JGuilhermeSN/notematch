@@ -152,7 +152,7 @@ def _product_card(page: ft.Page, p: Dict[str, Any]) -> ft.Card:
 
     return ft.Card(
         elevation=2,
-        surface_tint_color=ft.Colors.with_opacity(0.04, ft.Colors.WHITE),
+        #surface_tint_color=ft.Colors.with_opacity(0.04, ft.Colors.WHITE),
         content=ft.Container(
             padding=16,
             content=ft.Column(
@@ -181,7 +181,7 @@ def _product_card(page: ft.Page, p: Dict[str, Any]) -> ft.Card:
                             ),
                             ft.Container(expand=True),
                             ft.TextButton("Por que este?", on_click=open_explain),
-                            ft.ElevatedButton("Detalhes", on_click=open_details),
+                            ft.Button("Detalhes", on_click=open_details),
                         ],
                         alignment=ft.MainAxisAlignment.END,
                     ),
