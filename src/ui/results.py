@@ -1,24 +1,26 @@
 # src/ui/results.py
 from __future__ import annotations
-
+import traceback
 import flet as ft
 from typing import List, Dict, Any
 
 from src.ui.quiz_controller import quiz
 from src.core.recommender_service import recommend_topk
 from src.ui.app_state import set_selected
-from src.ui.explain_widget import explain_panel  # <-- (novo) painel de explicação
+from src.ui.explain_widget import explain_panel
+
+CLASS_LABELS = ["Ótimo", "Custo-Benefício", "Entrada"]
+CLASS_COLORS = [ft.Colors.GREEN_400, ft.Colors.BLUE_400, ft.Colors.ORANGE_400]
 
 
 def _rating_row(value: float | int | None) -> ft.Control:
-    """Renderiza as estrelas. Quando 0/None, não exibe nada."""
     try:
         v = float(value or 0)
     except Exception:
         v = 0.0
 
     if v <= 0:
-        return ft.Container()  # não mostra nada
+        return ft.Container()
 
     full = int(v)
     half = 1 if v - full >= 0.5 else 0
@@ -36,13 +38,12 @@ def _rating_row(value: float | int | None) -> ft.Control:
 
 
 def _spec_chip(text: str | None) -> ft.Control | None:
-    """Cria um chip simples; retorna None se vazio para poder filtrar."""
     s = (text or "").strip()
     if not s:
         return None
     return ft.Container(
         bgcolor=ft.Colors.with_opacity(0.08, ft.Colors.WHITE),
-        padding=ft.padding.symmetric(6, 10),
+        padding=ft.padding.symmetric(vertical=6, horizontal=10),
         border_radius=999,
         content=ft.Text(s, size=12),
     )
@@ -53,15 +54,14 @@ def _format_price_brl(v: Any) -> str:
         f = float(v or 0)
     except Exception:
         f = 0.0
-    # formata como BRL sem depender de locale
     return f"R$ {f:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 
 def _fallback_chip(p: Dict[str, Any]) -> ft.Control:
-    """Exibe um chip 'fallback Lx' quando houver relaxação."""
     relax = (p.get("explain") or {}).get("relaxation")
     if not relax:
         return ft.Container()
+
     level = relax.get("level", 0)
     return ft.Container(
         bgcolor=ft.Colors.with_opacity(0.10, ft.Colors.AMBER),
@@ -78,27 +78,41 @@ def _fallback_chip(p: Dict[str, Any]) -> ft.Control:
     )
 
 
-def _product_card(page: ft.Page, p: Dict[str, Any]) -> ft.Card:
-    # monta chips, ignorando Nones
+def _class_chip(label: str, color: ft.Colors) -> ft.Control:
+    return ft.Container(
+        bgcolor=ft.Colors.with_opacity(0.15, color),
+        padding=ft.padding.symmetric(vertical=4, horizontal=8),
+        border_radius=999,
+        content=ft.Text(
+            label,
+            size=12,
+            weight=ft.FontWeight.W_600,
+            color=color,
+        ),
+    )
+
+
+def _product_card(page: ft.Page, p: Dict[str, Any], class_label: str, class_color: ft.Colors) -> ft.Card:
+
     chips_controls: List[ft.Control] = []
-    # cpu
+
     cpu_chip = _spec_chip(p.get("cpu", ""))
     if cpu_chip:
         chips_controls.append(cpu_chip)
-    # ram
+
     ram_val = p.get("ram_gb", None)
     ram_chip = _spec_chip(f"{ram_val}GB RAM" if ram_val not in (None, "", "-") else "")
     if ram_chip:
         chips_controls.append(ram_chip)
-    # storage (pode não existir)
+
     storage_chip = _spec_chip(p.get("storage", ""))
     if storage_chip:
         chips_controls.append(storage_chip)
-    # gpu
+
     gpu_chip = _spec_chip(p.get("gpu", ""))
     if gpu_chip:
         chips_controls.append(gpu_chip)
-    # tela
+
     screen_chip = _spec_chip(p.get("screen", ""))
     if screen_chip:
         chips_controls.append(screen_chip)
@@ -115,7 +129,6 @@ def _product_card(page: ft.Page, p: Dict[str, Any]) -> ft.Card:
         if isinstance(rr, list):
             reasons = [str(x) for x in rr][:3]
         elif isinstance(rr, str):
-            # caso raro: reasons venha como string única
             reasons = [rr]
     except Exception:
         reasons = []
@@ -126,8 +139,8 @@ def _product_card(page: ft.Page, p: Dict[str, Any]) -> ft.Card:
         else ft.Container()
     )
 
-    # ---------- Diálogo "Por que este?" ----------
     explain_data = p.get("explain") or {}
+
     dlg = ft.AlertDialog(
         modal=True,
         content=ft.Container(
@@ -135,9 +148,16 @@ def _product_card(page: ft.Page, p: Dict[str, Any]) -> ft.Card:
             width=560,
             padding=10,
         ),
-        actions=[ft.TextButton("Fechar", on_click=lambda e: setattr(dlg, "open", False))],
         actions_alignment=ft.MainAxisAlignment.END,
     )
+
+    def close_dialog():
+        dlg.open = False
+        page.update()
+
+    dlg.actions = [
+        ft.TextButton("Fechar", on_click=lambda e: close_dialog())
+    ]
 
     if dlg not in page.overlay:
         page.overlay.append(dlg)
@@ -152,7 +172,6 @@ def _product_card(page: ft.Page, p: Dict[str, Any]) -> ft.Card:
 
     return ft.Card(
         elevation=2,
-        #surface_tint_color=ft.Colors.with_opacity(0.04, ft.Colors.WHITE),
         content=ft.Container(
             padding=16,
             content=ft.Column(
@@ -163,29 +182,51 @@ def _product_card(page: ft.Page, p: Dict[str, Any]) -> ft.Card:
                                 str(p.get("name", "—")),
                                 size=18,
                                 weight=ft.FontWeight.W_600,
-                                no_wrap=True,
-                                expand=False,
+                                max_lines=1,
+                                overflow=ft.TextOverflow.ELLIPSIS,
                             ),
                             ft.Container(expand=True),
-                            _fallback_chip(p),  # chip de fallback (quando houver)
+                            _class_chip(class_label, class_color),
+                            _fallback_chip(p),
                         ],
-                        alignment=ft.MainAxisAlignment.START,
                     ),
+
                     chips_row,
-                    ft.Row(
+
+                    ft.Column(
                         [
                             ft.Text(
                                 _format_price_brl(p.get("price_brl", 0)),
                                 size=16,
                                 weight=ft.FontWeight.W_600,
                             ),
-                            ft.Container(expand=True),
-                            ft.TextButton("Por que este?", on_click=open_explain),
-                            ft.Button("Detalhes", on_click=open_details),
+
+                            ft.Row(
+                                [
+                                    ft.Container(
+                                        expand=1,
+                                        content=ft.TextButton(
+                                            "Por que este?",
+                                            on_click=open_explain,
+                                        ),
+                                    ),
+                                    ft.Container(
+                                        expand=1,
+                                        content=ft.Button(
+                                            "Detalhes",
+                                            on_click=open_details,
+                                            height=36,
+                                        ),
+                                    ),
+                                ],
+                                spacing=10,
+                            ),
                         ],
-                        alignment=ft.MainAxisAlignment.END,
+                        spacing=8,
                     ),
+
                     ft.Container(height=6),
+
                     reasons_list,
                 ],
                 spacing=10,
@@ -195,14 +236,16 @@ def _product_card(page: ft.Page, p: Dict[str, Any]) -> ft.Card:
 
 
 def results_view(page: ft.Page) -> ft.View:
-    # tenta recomendar; mantém app vivo mesmo em caso de erro
+
     recs: List[Dict[str, Any]] = []
     error_text: str | None = None
+
     try:
         recs = recommend_topk(quiz.answers, k=3)
         if not isinstance(recs, list):
             recs = []
     except Exception as e:
+        traceback.print_exc()
         error_text = f"Falha ao gerar recomendações: {e}"
 
     header = ft.Row(
@@ -215,13 +258,19 @@ def results_view(page: ft.Page) -> ft.View:
     )
 
     cards: List[ft.Control] = []
+
     if recs:
-        cards = [_product_card(page, p) for p in recs if isinstance(p, dict)]
+        for idx, p in enumerate(recs):
+            if isinstance(p, dict):
+                label = CLASS_LABELS[idx] if idx < len(CLASS_LABELS) else "—"
+                color = CLASS_COLORS[idx] if idx < len(CLASS_COLORS) else ft.Colors.GREY_400
+                cards.append(_product_card(page, p, label, color))
 
     content_controls: List[ft.Control] = [
         header,
         ft.Text("Top 3 recomendados para você:", size=14, opacity=0.85),
     ]
+
     if error_text:
         content_controls.append(
             ft.Text(error_text, color=ft.Colors.RED_400, size=13, selectable=True)

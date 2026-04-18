@@ -66,9 +66,16 @@ def _is_eligible(nb: Notebook, rules: Dict[str, Any]) -> bool:
     teto = rules.get("budget_brl")
     piso = rules.get("budget_floor_brl")
 
-    if teto and (price_brl is not None) and price_brl > float(teto):
+    # 🔥 Se há regra de orçamento, preço precisa existir
+    if (teto or piso) and price_brl is None:
         return False
-    if piso and (price_brl is not None) and price_brl < float(piso):
+
+    # teto (máximo)
+    if teto and price_brl > float(teto):
+        return False
+
+    # piso (mínimo)
+    if piso and price_brl < float(piso):
         return False
 
     return True

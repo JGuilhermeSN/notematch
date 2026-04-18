@@ -1,19 +1,28 @@
 {
-  "Uso geral":{
-    "subcategoria":[
-      "Pesquisa",
+  "Uso Geral": {
+    "subcategoria": [
+      "Pesquisa acadêmica básica",
       "Navegação e internet",
-      "Jogos"
-    ]   
+      "Estudos escolares",
+      "Consumo de mídia (Netflix, YouTube)",
+      "Jogos leves",
+      "Trabalho administrativo básico"
+    ]
   },
-
   "Tecnologia da Informação": {
     "subcategoria": [
-      "Desenvolvedor de Software",
+      "Desenvolvedor Backend",
+      "Desenvolvedor Frontend",
+      "Desenvolvedor Full Stack",
+      "Desenvolvedor Mobile",
+      "Engenheiro de Software",
       "Cientista de Dados",
-      "Analista de Segurança da Informação",
+      "Analista de Dados",
+      "Engenheiro de Machine Learning",
+      "Administrador de Sistemas",
       "Administrador de Redes",
-      "Engenheiro de Machine Learning"
+      "DevOps",
+      "Analista de Segurança da Informação"
     ]
   },
   "Engenharia e Arquitetura": {
@@ -21,26 +30,36 @@
       "Engenheiro Civil",
       "Engenheiro Mecânico",
       "Engenheiro Elétrico",
+      "Engenheiro de Produção",
+      "Engenheiro Químico",
       "Arquiteto",
-      "Engenheiro de Produção"
+      "Projetista CAD",
+      "Modelador BIM",
+      "Engenheiro Estrutural"
     ]
   },
   "Design e Criatividade": {
     "subcategoria": [
       "Designer Gráfico",
-      "Designer de UX/UI",
+      "Designer UX/UI",
       "Editor de Vídeo",
       "Animador 3D",
-      "Fotógrafo Profissional"
+      "Motion Designer",
+      "Fotógrafo Profissional",
+      "Ilustrador Digital",
+      "Criador de Conteúdo (YouTube/TikTok)"
     ]
   },
   "Saúde": {
     "subcategoria": [
       "Médico Radiologista",
-      "Médico Patologista Clínico",
+      "Médico Clínico",
+      "Médico Patologista",
       "Biomédico",
-      "Enfermeiro de Telemedicina",
-      "Pesquisador em Biotecnologia"
+      "Pesquisador em Biotecnologia",
+      "Enfermeiro (telemedicina)",
+      "Farmacêutico",
+      "Dentista"
     ]
   },
   "Educação e Pesquisa": {
@@ -48,35 +67,42 @@
       "Professor Universitário",
       "Pesquisador Acadêmico",
       "Tutor Online",
-      "Especialista em EAD",
-      "Instrutor de Cursos Técnicos"
+      "Instrutor de Cursos Técnicos",
+      "Professor do Ensino Médio",
+      "Estudante Universitário"
     ]
   },
   "Negócios e Marketing": {
     "subcategoria": [
       "Analista de Marketing Digital",
       "Gestor de E-commerce",
-      "Especialista em SEO/SEM",
+      "Especialista em SEO",
       "Analista de Dados de Mercado",
-      "Consultor de Transformação Digital"
+      "Consultor de Negócios",
+      "Empreendedor",
+      "Gestor Financeiro",
+      "Analista Administrativo"
     ]
   },
   "Ciências Sociais e Humanas": {
     "subcategoria": [
+      "Jornalista",
       "Jornalista Multimídia",
-      "Sociólogo Pesquisador",
-      "Psicólogo Clínico Online",
-      "Advogado Especialista em Direito Digital",
-      "Cientista Político com Análise de Dados"
+      "Advogado",
+      "Advogado Digital",
+      "Psicólogo",
+      "Sociólogo",
+      "Cientista Político",
+      "Assistente Social"
     ]
   },
-  "Zoologia e afins": {
-    "subcategoria":[
-      "Zoologia",
-      "Veterinaria"
+  "Zoologia e Meio Ambiente": {
+    "subcategoria": [
+      "Veterinário",
+      "Zootecnista",
+      "Biólogo",
+      "Pesquisador Ambiental",
+      "Zoologo"
     ]
   }
 }
-
-
-
