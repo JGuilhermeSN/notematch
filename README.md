@@ -27,7 +27,7 @@ O **NoteMatch** é um assistente que recomenda notebooks de acordo com as necess
 
 ```bash
 # clone o repositório
-git clone https://github.com/<usuario>/notematch.git
+git clone https://github.com/JGuilhermeSN/notematch.git
 cd notematch
 
 # crie e ative um ambiente virtual
@@ -48,11 +48,4 @@ python -m src.ui.cli_app
 
 ```bash
 flet run --android -r main.py # rodar no android
-```
-
-## Testes
-
-```bash
-pip install pytest
-pytest tests/
 ```

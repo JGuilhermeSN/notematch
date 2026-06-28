@@ -57,7 +57,7 @@ def _get_price_eur(row: dict) -> float:
     return _to_float(row.get("Price_in_euros") or row.get("Price_euros") or row.get("price_eur") or row.get("price"))
 
 def load_notebooks(path: Path | None = None) -> List[Notebook]:
-    """Lê a base do Kaggle (CSV) SEM pandas e devolve uma lista de Notebooks normalizados.
+    """Lê a base do Kaggle (CSV) e devolve uma lista de Notebooks normalizados.
 
     Campos mapeados (quando disponíveis):
       - name      <- Product / Model / Name

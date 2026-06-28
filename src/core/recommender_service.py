@@ -1,3 +1,6 @@
+'''
+Função para realizar as recomendações. Realiza as pontuações de cada item para ser classificado
+'''
 # src/core/recommender_service.py
 from __future__ import annotations
 from typing import List, Dict, Any, Tuple, Optional, Mapping

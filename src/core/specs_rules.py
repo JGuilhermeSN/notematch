@@ -1,9 +1,13 @@
 # src/core/specs_rules.py
+'''
+Função de manipulação determinística/ atribui as regras referentes as especificações por categoria de uso
+'''
 from __future__ import annotations
 
 from typing import Dict, Any, Mapping, Tuple
 import re
 import unicodedata
+
 
 
 # -----------------------------
@@ -45,7 +49,7 @@ def _parse_budget_bounds_brl(text: str) -> Tuple[float | None, float | None]:
 
 
 # -----------------------------
-# 🔥 REGRAS DETERMINÍSTICAS
+# REGRAS DETERMINÍSTICAS
 # -----------------------------
 PROFESSION_RULES: Dict[str, Dict[str, Any]] = {
 
