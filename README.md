@@ -1,13 +1,13 @@
 # README – NoteMatch
 
-> **Assitente de Recomendação de Notebooks Baseado em Análise Inteligente de Especificações Técnicas**
-> Projeto de TCC – IFMT, 2025.
+> **Sistema de Recomendação de Notebooks Baseado em Conhecimento e Restrições**
+> Projeto de TCC – IFMT, 2026.
 
 ---
 
 ## Visão Geral
 
-O **NoteMatch** é um assistente que recomenda notebooks de acordo com as necessidades do usuário. A lógica consiste em um motor de perguntas que afunila as escolhas até gerar **especificações mínimas** (CPU, GPU, RAM, SSD, tela). Em seguida, o sistema filtra uma base de dados real de notebooks para sugerir modelos compatíveis e dentro do orçamento informado.
+O **NoteMatch** é um assistente que recomenda notebooks de acordo com as necessidades do usuário. A lógica consiste em um motor de perguntas que afunila as escolhas até gerar **especificações mínimas** (CPU, GPU, RAM, SSD, tela). Em seguida, o sistema filtra uma base de dados real de notebooks para sugerir três modelos compatíveis e dentro do orçamento informado.
 
 ## Funcionalidades
 
@@ -29,10 +29,6 @@ O **NoteMatch** é um assistente que recomenda notebooks de acordo com as necess
 # clone o repositório
 git clone https://github.com/JGuilhermeSN/notematch.git
 cd notematch
-
-# crie e ative um ambiente virtual
-python -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\Activate.ps1
 
 # instale as dependências
 pip install -r requirements.txt
