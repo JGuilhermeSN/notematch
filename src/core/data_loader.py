@@ -1,90 +1,161 @@
 # src/core/data_loader.py
+
 from __future__ import annotations
-from pathlib import Path
+
 import csv
-import re
+from pathlib import Path
 from typing import List
 
 from src.core.models import Notebook
+from src.core.parsers import (
+    parse_cpu_cores,
+    parse_cpu_threads,
+    parse_gpu_brand,
+    parse_gpu_dedicated,
+    parse_gpu_vram_gb,
+    parse_ram_gb,
+    parse_ram_type,
+    parse_storage_gb,
+    parse_storage_type,
+    parse_warranty_years,
+)
 
-DEFAULT_ENCODING = "latin1"
-DEFAULT_FILENAME = "base_dados.csv"  # Kaggle: laptops.csv adaptado
+DEFAULT_ENCODING = "utf-8-sig"
+DEFAULT_FILENAME = "base_dados.csv"
+
 
 def _project_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
+
 def _default_data_path() -> Path:
     return _project_root() / "data" / DEFAULT_FILENAME
 
-_num = re.compile(r"[\d\.]+")  # aceita '1,37kg' -> 1.37
 
-def _to_float(s: object, default: float = 0.0) -> float:
-    if s is None:
-        return default
-    txt = str(s).strip().replace(",", ".")
-    m = _num.findall(txt)
-    return float(m[0]) if m else default
+# ------------------------------------------------------------------
+# Helpers básicos
+# ------------------------------------------------------------------
 
-def _parse_inches(row: dict) -> float:
-    return _to_float(row.get("Inches") or row.get("inches") or row.get("Tela"))
+def _get_str(row: dict, key: str) -> str:
+    value = row.get(key)
+    return "" if value is None else str(value).strip()
 
-def _parse_weight(row: dict) -> float:
-    w = row.get("Weight") or row.get("weight_kg") or row.get("Peso")
-    if not w:
-        return 0.0
-    return _to_float(w)
 
-def _parse_ram_gb(v: object) -> int:
-    if not v:
-        return 0
-    txt = str(v).lower()
-    m = re.search(r"(\d+)\s*gb", txt)
-    if m:
-        return int(m.group(1))
+def _get_int(row: dict, key: str) -> int:
     try:
-        return int(float(txt.replace(",", ".")))
-    except Exception:
+        return int(float(str(row.get(key, "0")).strip()))
+    except (ValueError, TypeError):
         return 0
 
-def _get_str(row: dict, *keys: str) -> str:
-    for k in keys:
-        v = row.get(k)
-        if v is not None:
-            return str(v).strip()
-    return ""
 
-def _get_price_eur(row: dict) -> float:
-    return _to_float(row.get("Price_in_euros") or row.get("Price_euros") or row.get("price_eur") or row.get("price"))
+def _get_float(row: dict, key: str) -> float:
+    try:
+        return float(str(row.get(key, "0")).replace(",", ".").strip())
+    except (ValueError, TypeError):
+        return 0.0
+
+
+def _get_bool(row: dict, key: str) -> bool:
+    value = str(row.get(key, "")).strip().lower()
+    return value in ("true", "1", "yes", "sim", "y")
+
+
+# ------------------------------------------------------------------
+# Loader principal
+# ------------------------------------------------------------------
 
 def load_notebooks(path: Path | None = None) -> List[Notebook]:
-    """Lê a base do Kaggle (CSV) e devolve uma lista de Notebooks normalizados.
 
-    Campos mapeados (quando disponíveis):
-      - name      <- Product / Model / Name
-      - company   <- Company / Brand
-      - cpu       <- Cpu / CPU / cpu
-      - ram_gb    <- Ram / RAM / ram (converte '8GB' -> 8)
-      - gpu       <- Gpu / GPU / gpu
-      - inches    <- Inches
-      - screen_res<- ScreenResolution / Screen_Resolution / screen_resolution
-      - weight_kg <- Weight (converte '1.37kg' -> 1.37)
-      - price_eur <- Price_in_euros / Price_euros / price_eur / price
-    """
     csv_path = path or _default_data_path()
-    out: List[Notebook] = []
-    with open(csv_path, "r", encoding=DEFAULT_ENCODING, newline="") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            nb = Notebook(
-                name=_get_str(row, "Product", "product_name", "Model", "Name", "model"),
-                company=_get_str(row, "Company", "Brand", "brand"),
-                cpu=_get_str(row, "Cpu", "CPU", "cpu"),
-                ram_gb=_parse_ram_gb(row.get("Ram") or row.get("RAM") or row.get("ram")),
-                gpu=_get_str(row, "Gpu", "GPU", "gpu"),
-                inches=_parse_inches(row),
-                screen_res=_get_str(row, "ScreenResolution", "Screen_Resolution", "screen_resolution"),
-                weight_kg=_parse_weight(row),
-                price_eur=_get_price_eur(row),
+
+    notebooks: List[Notebook] = []
+
+    with open(csv_path, encoding=DEFAULT_ENCODING, newline="") as file:
+
+        reader = csv.DictReader(file)
+
+        # Normaliza os nomes das colunas (o CSV possui " price_brl ")
+        rows = [
+            {key.strip(): value for key, value in row.items()}
+            for row in reader
+        ]
+
+    for row in rows:
+
+        ram_str = _get_str(row, "ram")
+        core_str = _get_str(row, "core")
+        memory_str = _get_str(row, "memory")
+        gpu_str = _get_str(row, "graphic_card")
+        warranty_str = _get_str(row, "warrenty")  # nome original do CSV
+
+        notebooks.append(
+
+            Notebook(
+
+                # -------------------------------------------------
+                # Identificação
+                # -------------------------------------------------
+                name=_get_str(row, "model"),
+                company=_get_str(row, "brand"),
+
+                # -------------------------------------------------
+                # CPU
+                # -------------------------------------------------
+                cpu=_get_str(row, "processor"),
+                cpu_brand="",           # poderá ser inferido futuramente
+                cpu_series="",          # poderá ser inferido futuramente
+                cpu_model="",           # poderá ser inferido futuramente
+                cpu_clock_ghz=0.0,      # não disponível na base
+                cpu_cores=parse_cpu_cores(core_str),
+                cpu_threads=parse_cpu_threads(core_str),
+
+                # -------------------------------------------------
+                # RAM
+                # -------------------------------------------------
+                ram_gb=parse_ram_gb(ram_str),
+                ram_type=parse_ram_type(ram_str),
+
+                # -------------------------------------------------
+                # GPU
+                # -------------------------------------------------
+                gpu=gpu_str,
+                gpu_brand=parse_gpu_brand(gpu_str),
+                gpu_model="",           # poderá ser inferido futuramente
+                gpu_vram_gb=parse_gpu_vram_gb(gpu_str),
+                gpu_dedicated=parse_gpu_dedicated(gpu_str),
+
+                # -------------------------------------------------
+                # Tela
+                # -------------------------------------------------
+                inches=_get_float(row, "inches"),
+                res_width=_get_int(row, "screen_width"),
+                res_height=_get_int(row, "screen_height"),
+                is_touchscreen=_get_bool(row, "is_touchscreen"),
+
+                # -------------------------------------------------
+                # Armazenamento
+                # -------------------------------------------------
+                storage=memory_str,
+                storage_type=parse_storage_type(memory_str),
+                storage_gb=parse_storage_gb(memory_str),
+
+                # -------------------------------------------------
+                # Sistema
+                # -------------------------------------------------
+                os=_get_str(row, "os"),
+                warranty_years=parse_warranty_years(warranty_str),
+
+                # -------------------------------------------------
+                # Avaliação
+                # -------------------------------------------------
+                rating=_get_float(row, "rating"),
+
+                # -------------------------------------------------
+                # Preço
+                # -------------------------------------------------
+                price_brl=_get_float(row, "price_brl"),
             )
-            out.append(nb)
-    return out
+
+        )
+
+    return notebooks

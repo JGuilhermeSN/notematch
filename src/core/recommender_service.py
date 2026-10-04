@@ -1,443 +1,441 @@
-'''
-Função para realizar as recomendações. Realiza as pontuações de cada item para ser classificado
-'''
 # src/core/recommender_service.py
+"""
+Motor de recomendação determinística de notebooks.
+
+Fluxo principal (recommend_topk):
+  1. Derivar política de requisitos mínimos a partir do perfil do usuário.
+  2. Filtrar (hard-filter) e pontuar todos os notebooks elegíveis.
+  3. Selecionar três perfis distintos: Ótimo, Custo-Benefício e Entrada.
+  4. Aplicar fallback progressivo caso não haja candidatos suficientes.
+  5. Montar e retornar os resultados enriquecidos com explicação.
+"""
 from __future__ import annotations
-from typing import List, Dict, Any, Tuple, Optional, Mapping
+
 import math
 import re
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from src.core.data_loader import load_notebooks
 from src.core.models import Notebook
 from src.core.specs_rules import infer_specs
 
-EUR_TO_BRL = 6.0  # taxa de câmbio - converte Euro em Real
+# ---------------------------------------------------------------------------
+# Tipos internos
+# ---------------------------------------------------------------------------
+_Rules  = Dict[str, Any]
+_Scored = Tuple[float, float, Notebook, List[str], Optional[int], List[Dict[str, Any]]]
+#               spec_s  full_s  nb        reasons    price_brl     score_parts
 
-# -----------------------------
-# Helpers de normalização/tiers
-# -----------------------------
-def _screen_short(nb: Notebook) -> str:
-    return (f'{nb.inches:.1f}" {nb.screen_res}' if nb.screen_res else f'{nb.inches:.1f}"') if nb.inches > 0 else (nb.screen_res or "—")
-
+# ---------------------------------------------------------------------------
+# Helpers de normalização
+# ---------------------------------------------------------------------------
 def _cpu_tier(cpu: str) -> int:
+    """
+    Classifica o processador em um tier de desempenho (1–9).
+
+    Hierarquia:
+      9 — Core Ultra 9, Ryzen AI 9, i9, Apple M4 / M3 Pro / M3 Max
+      7 — Core Ultra 7, Core 7, Ryzen 7, i7, Apple M1–M3, Snapdragon X Elite
+      5 — Core Ultra 5, Core 5, Ryzen 5, i5, Snapdragon X Plus / X
+      3 — Core 3, Ryzen 3, i3
+      1 — Celeron, Pentium, Athlon, MediaTek, N-series (básico / entrada)
+    """
     s = (cpu or "").lower()
-    if "i9" in s or "ryzen 9" in s or re.search(r"\br\s*9\b", s): return 9
-    if "i7" in s or "ryzen 7" in s or re.search(r"\br\s*7\b", s): return 7
-    if "i5" in s or "ryzen 5" in s or re.search(r"\br\s*5\b", s): return 5
-    if "i3" in s or "ryzen 3" in s or re.search(r"\br\s*3\b", s): return 3
-    if "m1" in s or "m2" in s or "m3" in s: return 7  # Apple Silicon
+
+    # Tier 9 — workstation / flagship
+    if "core ultra 9" in s:                          return 9
+    if "ryzen ai 9" in s or "ryzen 9 ai" in s:       return 9
+    if re.search(r"ryzen\s*9\b", s):                return 9
+    if "i9" in s:                                    return 9
+    if "apple" in s and ("m4" in s or "m3 max" in s or "m3 pro" in s): return 9
+
+    # Tier 7 — alto desempenho
+    if "core ultra 7" in s:                          return 7
+    if re.search(r"core\s+7\b", s):                 return 7
+    if re.search(r"ryzen\s*(ai\s*)?7\b", s):       return 7
+    if "i7" in s:                                    return 7
+    if "apple" in s and re.search(r"m[123]\b", s):  return 7
+    if "snapdragon x elite" in s:                    return 7
+
+    # Tier 5 — desempenho intermediário
+    if "core ultra 5" in s:                          return 5
+    if re.search(r"core\s+5\b", s):                 return 5
+    if re.search(r"ryzen\s*(ai\s*)?5\b", s):       return 5
+    if "i5" in s:                                    return 5
+    if "snapdragon x plus" in s or "snapdragon x" in s: return 5
+
+    # Tier 3 — entrada produtiva
+    if re.search(r"ryzen\s*(ai\s*)?3\b", s):       return 3
+    if re.search(r"core\s+3\b", s):                 return 3
+    if "i3" in s:                                    return 3
+
+    # Tier 1 — básico (Celeron, Pentium, Athlon, MediaTek, N-series)
     return 1
 
-def _has_dedicated_gpu(gpu: str) -> bool:
-    g = (gpu or "").lower()
-    if any(x in g for x in ["gtx", "rtx", "radeon", "rx ", "vega", "geforce"]): return True
-    if "nvidia" in g and "mx" in g: return True
-    return False
+def _screen_label(nb: Notebook) -> str:
+    res = f"{nb.res_width}x{nb.res_height}" if nb.res_width and nb.res_height else ""
+    if nb.inches > 0:
+        return f'{nb.inches:.1f}" {res}'.strip()
+    return res or "—"
 
-def _gpu_label(gpu: Optional[str]) -> str:
-    return "dedicada" if _has_dedicated_gpu(gpu or "") else "integrada"
+def _to_brl(price: float) -> Optional[int]:
+    return int(round(price)) if price and price > 0 else None
 
-def _safe_brl(price_eur: float) -> Optional[int]:
-    if not price_eur or price_eur <= 0:
-        return None
-    return int(round(price_eur * EUR_TO_BRL))
-
-# -----------------------------
-# Elegibilidade (mínimos = mínimos)
-# -----------------------------
-def _is_eligible(nb: Notebook, rules: Dict[str, Any]) -> bool:
-    """Hard-filter: remove itens que NÃO atendem os mínimos do perfil (L0/L1)."""
-    # RAM é essencial (se faltou ou ficou abaixo, sai)
-    if nb.ram_gb is None or nb.ram_gb <= 0:
+# ---------------------------------------------------------------------------
+# Elegibilidade (hard-filter)
+# ---------------------------------------------------------------------------
+def _is_eligible(nb: Notebook, rules: _Rules) -> bool:
+    """Descarta notebooks que não atingem os requisitos mínimos do perfil."""
+    if not nb.ram_gb or nb.ram_gb < int(rules.get("min_ram_gb", 8) or 8):
         return False
-    if nb.ram_gb < int(rules.get("min_ram_gb", 8) or 8):
+    if not (nb.cpu or "").strip() or _cpu_tier(nb.cpu) < int(rules.get("min_cpu_tier", 3) or 3):
+        return False
+    if rules.get("needs_dedicated_gpu") and not nb.gpu_dedicated:
         return False
 
-    # CPU é essencial (se faltou ou não atingiu o tier, sai)
-    if not (nb.cpu or "").strip():
+    price = _to_brl(nb.price_brl)
+    teto  = rules.get("budget_brl")
+    piso  = rules.get("budget_floor_brl")
+    if (teto or piso) and price is None:
         return False
-    if _cpu_tier(nb.cpu) < int(rules.get("min_cpu_tier", 3) or 3):
+    if teto and price > float(teto):
         return False
-
-    # GPU dedicada: só exigir quando o perfil pede explicitamente
-    if bool(rules.get("needs_dedicated_gpu", False)):
-        if not _has_dedicated_gpu(nb.gpu):
-            return False
-
-    # Orçamento também é "hard" quando houver teto/piso (senão distorce o top-3)
-    price_brl = _safe_brl(nb.price_eur)
-    teto = rules.get("budget_brl")
-    piso = rules.get("budget_floor_brl")
-
-    # 🔥 Se há regra de orçamento, preço precisa existir
-    if (teto or piso) and price_brl is None:
+    if piso and price < float(piso):
         return False
-
-    # teto (máximo)
-    if teto and price_brl > float(teto):
-        return False
-
-    # piso (mínimo)
-    if piso and price_brl < float(piso):
-        return False
-
     return True
 
-# -----------------------------------
-# Score com breakdown (explicabilidade)
-# -----------------------------------
-def _score(nb: Notebook, rules: Dict[str, Any], budget_brl: Optional[float], budget_floor_brl: Optional[float] = None) -> Tuple[float, List[str], Optional[int], List[Dict[str, Any]]]:
-    """
-    Retorna:
-      score: float
-      reasons: lista textual curta (compatibilidade com código anterior)
-      price_brl: preço convertido
-      score_parts: breakdown estruturado [{'crit': 'RAM', 'delta': +1.0}, ...]
-    """
-    reasons: List[str] = []
-    score_parts: List[Dict[str, Any]] = []
-    score = 0.0
+# ---------------------------------------------------------------------------
+# Pontuação de especificações (sem influência de preço)
+#
+# Utilizado para selecionar o perfil Ótimo e como numerador do Custo-Benefício.
+# Aplica tetos de utilidade para evitar que specs excessivas (overkill) dominem:
+#   RAM     → cap em 4× o mínimo do perfil
+#   CPU     → cap em min_tier + 4 (máx 9)
+#   GPU VRAM→ cap de 8 GB se dedicada exigida, 4 GB se opcional
+#   Storage → cap em 1 TB
+# ---------------------------------------------------------------------------
+def _spec_score(nb: Notebook, rules: _Rules) -> float:
+    min_ram   = int(rules.get("min_ram_gb", 8) or 8)
+    min_tier  = int(rules.get("min_cpu_tier", 3) or 3)
+    needs_gpu = bool(rules.get("needs_dedicated_gpu", False))
+    score     = 0.0
+
+    # RAM
+    eff_ram = min(nb.ram_gb, min_ram * 4)
+    if nb.ram_gb >= min_ram:
+        score += 1.0 + math.log2(max(1, eff_ram / min_ram)) * 0.5
+
+    # CPU
+    tier     = _cpu_tier(nb.cpu)
+    eff_tier = min(tier, min(9, min_tier + 4))
+    if tier >= min_tier:
+        score += 1.0 + (eff_tier - min_tier) * 0.25
+
+    # GPU
+    vram_cap = 8 if needs_gpu else 4
+    if needs_gpu and nb.gpu_dedicated:
+        score += 1.0 + math.log2(max(1, min(nb.gpu_vram_gb or 0, vram_cap))) * 0.2
+    elif not needs_gpu and nb.gpu_dedicated:
+        score += 0.5 + math.log2(max(1, min(nb.gpu_vram_gb or 0, vram_cap))) * 0.1
+
+    # Storage
+    eff_storage = min(nb.storage_gb or 0, 1024)
+    if eff_storage > 0:
+        score += math.log2(max(1, eff_storage / 256)) * 0.15
+    if (nb.storage_type or "").upper() in ("SSD", "NVME"):
+        score += 0.2
+
+    # Avaliação do usuário
+    if nb.rating and nb.rating > 0:
+        score += (nb.rating / 5.0) * 0.5
+
+    return score
+
+# ---------------------------------------------------------------------------
+# Pontuação completa (specs + orçamento)
+#
+# Utilizado para compor o `score_breakdown` da explicação e como desempate.
+# ---------------------------------------------------------------------------
+def _full_score(
+    nb: Notebook,
+    rules: _Rules,
+    budget_ceiling: Optional[float],
+    budget_floor:   Optional[float] = None,
+) -> Tuple[float, List[str], Optional[int], List[Dict[str, Any]]]:
+    """Retorna (score, reasons, price_brl, score_parts)."""
+    score, reasons, parts = 0.0, [], []
+
+    def _add(crit, delta, why, reason=None):
+        nonlocal score
+        score += delta
+        parts.append({"crit": crit, "delta": delta, "why": why})
+        if reason:
+            reasons.append(reason)
 
     # RAM
     if nb.ram_gb >= rules["min_ram_gb"]:
-        score += 1.0
-        score_parts.append({"crit": "RAM", "delta": +1.0, "why": f"RAM ≥ {rules['min_ram_gb']}GB"})
-        reasons.append(f"RAM ≥ {rules['min_ram_gb']}GB")
+        _add("RAM", +1.0, f"RAM ≥ {rules['min_ram_gb']} GB", f"RAM ≥ {rules['min_ram_gb']}GB")
 
     # CPU
     if _cpu_tier(nb.cpu) >= rules["min_cpu_tier"]:
-        score += 1.0
-        score_parts.append({"crit": "CPU", "delta": +1.0, "why": "CPU atende/min exigida"})
-        reasons.append("CPU adequada")
+        _add("CPU", +1.0, "CPU atende o mínimo exigido", "CPU adequada")
 
     # GPU
     if rules["needs_dedicated_gpu"]:
-        if _has_dedicated_gpu(nb.gpu):
-            score += 1.0
-            score_parts.append({"crit": "GPU", "delta": +1.0, "why": "GPU dedicada exigida"})
-            reasons.append("GPU dedicada")
+        if nb.gpu_dedicated:
+            _add("GPU", +1.0, "GPU dedicada exigida", "GPU dedicada")
         else:
-            score -= 0.5
-            score_parts.append({"crit": "GPU", "delta": -0.5, "why": "Exigia dedicada; item tem integrada"})
-            reasons.append("GPU integrada")
-    else:
-        # bonificação pequena por ter dedicada mesmo não sendo requisito
-        if _has_dedicated_gpu(nb.gpu):
-            score += 0.5
-            score_parts.append({"crit": "GPU", "delta": +0.5, "why": "Dedicada opcional (melhora desempenho gráfico)"})
+            _add("GPU", -0.5, "Exigia dedicada; item tem integrada", "GPU integrada")
+    elif nb.gpu_dedicated:
+        _add("GPU", +0.5, "Dedicada opcional (melhora desempenho gráfico)")
 
+    # Avaliação
+    if nb.rating and nb.rating > 0:
+        bonus = round((nb.rating / 5.0) * 0.5, 3)
+        _add("Rating", +bonus, f"Avaliação {nb.rating:.1f}/5.0")
 
-    # Orçamento (teto e/ou piso)
-    price_brl = _safe_brl(nb.price_eur)
+    # Orçamento
+    price = _to_brl(nb.price_brl)
+    floor = budget_floor or rules.get("budget_floor_brl")
 
-    budget_ceiling = budget_brl
-    budget_floor = budget_floor_brl if budget_floor_brl else rules.get("budget_floor_brl")
-
-    if (budget_ceiling or budget_floor) and price_brl is not None:
-        # --- teto (faixas "até" / "x - y")
+    if (budget_ceiling or floor) and price is not None:
         if budget_ceiling:
-            if price_brl <= budget_ceiling:
-                # quanto mais próximo do teto, mais ponto (sem exagero)
-                proximity = 1.0 - (budget_ceiling - price_brl) / max(budget_ceiling, 1)
-                proximity = max(0.0, min(1.0, proximity))
-                score += proximity
-                score_parts.append({"crit": "Preço (teto)", "delta": +proximity, "why": "Dentro do orçamento"})
-                reasons.append(f"Preço dentro do orçamento (≈ R$ {price_brl:,})".replace(",", "."))
+            if price <= budget_ceiling:
+                proximity = max(0.0, min(1.0, 1.0 - (budget_ceiling - price) / max(budget_ceiling, 1)))
+                _add("Preço (teto)", +proximity, "Dentro do orçamento",
+                     f"Preço dentro do orçamento (≈ R$ {price:,})".replace(",", "."))
             else:
-                over = (price_brl - budget_ceiling) / max(budget_ceiling, 1)
-                penal = min(1.5, over)
-                score -= penal
-                score_parts.append({"crit": "Preço (teto)", "delta": -penal, "why": "Acima do orçamento"})
-                reasons.append(f"Acima do orçamento (≈ R$ {price_brl:,})".replace(",", "."))
-
-        # --- piso (opção "Acima de R$ ...")
-        if budget_floor:
-            if price_brl < budget_floor:
-                under = (budget_floor - price_brl) / max(budget_floor, 1)
-                penal = min(1.0, under)
-                score -= penal
-                score_parts.append({"crit": "Preço (piso)", "delta": -penal, "why": "Abaixo do piso do orçamento"})
+                penal = min(1.5, (price - budget_ceiling) / max(budget_ceiling, 1))
+                _add("Preço (teto)", -penal, "Acima do orçamento",
+                     f"Acima do orçamento (≈ R$ {price:,})".replace(",", "."))
+        if floor:
+            if price < floor:
+                _add("Preço (piso)", -min(1.0, (floor - price) / max(floor, 1)), "Abaixo do piso do orçamento")
             else:
-                bonus = 0.25
-                score += bonus
-                score_parts.append({"crit": "Preço (piso)", "delta": +bonus, "why": "Atende o piso do orçamento"})
+                _add("Preço (piso)", +0.25, "Atende o piso do orçamento")
 
-    return score, reasons, price_brl, score_parts
+    return score, reasons, price, parts
 
-# -----------------------------
-# Diversificação simples por marca/tela
-# -----------------------------
-def _diversify_topk(items: List[Tuple[float, Notebook, List[str], Optional[int], List[Dict[str, Any]]]], k: int) -> List[Tuple[float, Notebook, List[str], Optional[int], List[Dict[str, Any]]]]:
-    out: List[Tuple[float, Notebook, List[str], Optional[int], List[Dict[str, Any]]]] = []
-    seen: set[tuple] = set()
-    for s, nb, r, p, sp in items:
-        key = (nb.company, round(nb.inches or 0))
-        if key in seen and len(out) < k - 1:
+# ---------------------------------------------------------------------------
+# Pipeline de pontuação
+# ---------------------------------------------------------------------------
+def _score_all(rule_set: _Rules) -> List[_Scored]:
+    results = []
+    for nb in load_notebooks():
+        if not _is_eligible(nb, rule_set):
             continue
-        seen.add(key)
-        out.append((s, nb, r, p, sp))
-        if len(out) >= k:
-            break
-    return out
+        ss = _spec_score(nb, rule_set)
+        fs, reasons, price, parts = _full_score(
+            nb, rule_set,
+            rule_set.get("budget_brl"),
+            rule_set.get("budget_floor_brl"),
+        )
+        results.append((ss, fs, nb, reasons, price, parts))
+    return results
 
-# -----------------------------
-# Explicação (sempre ativa)
-# -----------------------------
-def _status_num(val: float | int | None, min_required: float | int | None) -> str:
-    if val is None or min_required is None:
-        return "indefinido"
-    try:
-        return "atingido" if float(val) >= float(min_required) else "abaixo"
-    except Exception:
-        return "indefinido"
+# ---------------------------------------------------------------------------
+# Fallback progressivo
+# ---------------------------------------------------------------------------
+def _apply_fallback(base: _Rules, scored: List[_Scored], k: int) -> Tuple[List[_Scored], int, List[Dict]]:
+    """
+    Relaxa critérios progressivamente até obter ao menos k candidatos.
+    Retorna (scored, fallback_level, diffs).
 
-def _contrast_lines(curr: Dict[str, Any], other: Dict[str, Any] | None) -> List[str]:
-    """Comparação objetiva e curta com o próximo candidato."""
-    if not other:
+    L1 — remove exigência de GPU dedicada; reduz RAM mínima pela metade (mín. 8 GB).
+    L2 — reduz tier mínimo de CPU em 4 pontos.
+    """
+    diffs: List[Dict] = []
+
+    if len(scored) >= k:
+        return scored, 0, diffs
+
+    relaxed = dict(base)
+
+    # L1
+    for param, new_val in [
+        ("needs_dedicated_gpu", False),
+        ("min_ram_gb", max(8, base["min_ram_gb"] // 2)),
+    ]:
+        if relaxed[param] != new_val:
+            diffs.append({"param": param, "from": relaxed[param], "to": new_val, "why": "fallback L1"})
+            relaxed[param] = new_val
+
+    scored = _score_all(relaxed)
+    if len(scored) >= k:
+        return scored, 1, diffs
+
+    # L2
+    new_tier = max(3, relaxed["min_cpu_tier"] - 4)
+    if new_tier != relaxed["min_cpu_tier"]:
+        diffs.append({"param": "min_cpu_tier", "from": relaxed["min_cpu_tier"], "to": new_tier, "why": "fallback L2"})
+        relaxed["min_cpu_tier"] = new_tier
+
+    scored = _score_all(relaxed)
+    return scored, 2, diffs
+
+# ---------------------------------------------------------------------------
+# Seleção do trio de perfis
+# ---------------------------------------------------------------------------
+def _select_trio(scored: List[_Scored]) -> List[Tuple[str, str, _Scored]]:
+    """
+    Seleciona três notebooks distintos, um por perfil:
+      Ótimo           → maior spec_score  (máxima utilidade absoluta)
+      Custo-Benefício → maior spec_score / price  (eficiência por real gasto)
+      Entrada         → menor preço entre os elegíveis
+    """
+    if not scored:
         return []
-    out: List[str] = []
-    # RAM
-    try:
-        a, b = int(curr.get("ram_gb") or 0), int(other.get("ram_gb") or 0)
-        if a != b:
-            out.append(f"RAM: {a} GB vs {b} GB")
-    except Exception:
-        pass
-    # GPU
-    gl = _gpu_label(curr.get("gpu"))
-    gl2 = _gpu_label(other.get("gpu"))
-    if gl != gl2:
-        out.append(f"GPU: {gl} vs {gl2}")
-    # Preço
-    pb, pb2 = curr.get("price_brl"), other.get("price_brl")
-    if isinstance(pb, (int, float)) and isinstance(pb2, (int, float)) and pb != pb2:
-        out.append(f"Preço: R$ {pb:,.2f} vs R$ {pb2:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
-    return out[:3]
 
-def _build_explanation_dict(
-    nb_dict: Dict[str, Any],
-    policy_after: Dict[str, Any],
-    score_parts: List[Dict[str, Any]],
-    neighbor_dict: Dict[str, Any] | None,
+    by_spec  = sorted(scored, key=lambda t: -t[0])
+    by_ratio = sorted(scored, key=lambda t: -(t[0] / t[4]) if t[4] else 0)
+    by_price = sorted(scored, key=lambda t:  t[4] if t[4] is not None else math.inf)
+
+    profiles = [
+        ("otimo",           "Ótimo",           by_spec),
+        ("custo_beneficio", "Custo-Benefício",  by_ratio),
+        ("entrada",         "Entrada",          by_price),
+    ]
+
+    used: set[str] = set()
+    result = []
+    for key, label, ranking in profiles:
+        pick = next((item for item in ranking if item[2].name not in used), ranking[0])
+        used.add(pick[2].name)
+        result.append((key, label, pick))
+    return result
+
+# ---------------------------------------------------------------------------
+# Montagem da explicação
+# ---------------------------------------------------------------------------
+def _build_explanation(
+    nb_dict:        Dict[str, Any],
+    policy:         _Rules,
+    score_parts:    List[Dict[str, Any]],
+    neighbor:       Optional[Dict[str, Any]],
     fallback_level: int,
-    diffs: List[Dict[str, Any]]
+    diffs:          List[Dict],
 ) -> Dict[str, Any]:
-    compliance: List[Dict[str, Any]] = []
 
-    # RAM
-    compliance.append({
-        "crit": "RAM",
-        "min": policy_after.get("min_ram_gb"),
-        "val": nb_dict.get("ram_gb"),
-        "status": _status_num(nb_dict.get("ram_gb"), policy_after.get("min_ram_gb")),
-    })
-    # CPU tier
-    compliance.append({
-        "crit": "CPU_tier",
-        "min": policy_after.get("min_cpu_tier"),
-        "val": nb_dict.get("cpu_tier"),
-        "status": _status_num(nb_dict.get("cpu_tier"), policy_after.get("min_cpu_tier")),
-    })
-    # GPU
-    if policy_after.get("needs_dedicated_gpu"):
-        compliance.append({
-            "crit": "GPU",
-            "min": "dedicada",
-            "val": _gpu_label(nb_dict.get("gpu")),
-            "status": "atingido" if _gpu_label(nb_dict.get("gpu")) == "dedicada" else "abaixo",
-        })
-    else:
-        compliance.append({
-            "crit": "GPU",
-            "min": "integrada ou dedicada",
-            "val": _gpu_label(nb_dict.get("gpu")),
-            "status": "atingido",
-        })
-    # Preço
-    pr = nb_dict.get("price_brl")
-    teto = policy_after.get("budget_brl")
-    piso = policy_after.get("budget_floor_brl")
+    def _status(val, minimum) -> str:
+        try:
+            return "atingido" if float(val) >= float(minimum) else "abaixo"
+        except (TypeError, ValueError):
+            return "indefinido"
 
+    def _contrast() -> List[str]:
+        if not neighbor:
+            return []
+        lines = []
+        a, b = nb_dict.get("ram_gb", 0), neighbor.get("ram_gb", 0)
+        if a != b:
+            lines.append(f"RAM: {a} GB vs {b} GB")
+        ga = "dedicada" if nb_dict.get("gpu_dedicated") else "integrada"
+        gb = "dedicada" if neighbor.get("gpu_dedicated") else "integrada"
+        if ga != gb:
+            lines.append(f"GPU: {ga} vs {gb}")
+        pa, pb = nb_dict.get("price_brl"), neighbor.get("price_brl")
+        if isinstance(pa, (int, float)) and isinstance(pb, (int, float)) and pa != pb:
+            fmt = lambda v: f"R$ {v:,.2f}".replace(",","X").replace(".",",").replace("X",".")
+            lines.append(f"Preço: {fmt(pa)} vs {fmt(pb)}")
+        return lines[:3]
+
+    compliance = [
+        {"crit": "RAM",      "min": policy.get("min_ram_gb"),   "val": nb_dict.get("ram_gb"),
+         "status": _status(nb_dict.get("ram_gb"), policy.get("min_ram_gb"))},
+        {"crit": "CPU_tier", "min": policy.get("min_cpu_tier"), "val": nb_dict.get("cpu_tier"),
+         "status": _status(nb_dict.get("cpu_tier"), policy.get("min_cpu_tier"))},
+        {"crit": "GPU",
+         "min": "dedicada" if policy.get("needs_dedicated_gpu") else "integrada ou dedicada",
+         "val": "dedicada" if nb_dict.get("gpu_dedicated") else "integrada",
+         "status": "atingido" if (not policy.get("needs_dedicated_gpu") or nb_dict.get("gpu_dedicated")) else "abaixo"},
+    ]
+
+    pr, teto, piso = nb_dict.get("price_brl"), policy.get("budget_brl"), policy.get("budget_floor_brl")
     if piso:
-        compliance.append({
-            "crit": "Preço (piso)",
-            "min": piso,
-            "val": pr,
-            "status": "atingido" if (isinstance(pr, (int, float)) and pr >= piso) else "abaixo",
-        })
-
+        compliance.append({"crit": "Preço (piso)", "min": piso, "val": pr,
+                            "status": "atingido" if isinstance(pr, (int, float)) and pr >= piso else "abaixo"})
     if teto:
-        compliance.append({
-            "crit": "Preço (teto)",
-            "max": teto,
-            "val": pr,
-            "status": "abaixo_teto" if (isinstance(pr, (int, float)) and pr <= teto) else "acima",
-        })
+        compliance.append({"crit": "Preço (teto)", "max": teto, "val": pr,
+                            "status": "abaixo_teto" if isinstance(pr, (int, float)) and pr <= teto else "acima"})
 
-
-    explain = {
-        "policy": {
-            "min_ram_gb": policy_after.get("min_ram_gb"),
-            "min_cpu_tier": policy_after.get("min_cpu_tier"),
-            "needs_dedicated_gpu": policy_after.get("needs_dedicated_gpu"),
-            "budget_brl": policy_after.get("budget_brl"),
-            "budget_floor_brl": policy_after.get("budget_floor_brl"),
-        },
-        "compliance": compliance,
-        "score_breakdown": score_parts,   # [{crit, delta, why}]
-        "contrastive": _contrast_lines(nb_dict, neighbor_dict),
+    explain: Dict[str, Any] = {
+        "policy": {k: policy.get(k) for k in
+                   ("min_ram_gb", "min_cpu_tier", "needs_dedicated_gpu", "budget_brl", "budget_floor_brl")},
+        "compliance":      compliance,
+        "score_breakdown": score_parts,
+        "contrastive":     _contrast(),
     }
     if fallback_level > 0:
         explain["relaxation"] = {"level": fallback_level, "diffs": diffs}
     return explain
 
-# -----------------------------
-# Recomendações
-# -----------------------------
+# ---------------------------------------------------------------------------
+# Ponto de entrada público
+# ---------------------------------------------------------------------------
 def recommend_topk(answers: Mapping[str, Any], k: int = 3) -> List[Dict[str, Any]]:
     """
-    Gera recomendações REAIS (sem mock) a partir da base Kaggle.
-    Agora com explicação sempre-ativa (explain) e fallback só quando necessário.
+    Retorna k recomendações com perfis distintos.
+
+    Cada item carrega:
+      - Dados do notebook (name, company, cpu, ram_gb, gpu, screen, price_brl…)
+      - category / category_key  →  identifica o perfil (Ótimo, Custo-Benefício, Entrada)
+      - reasons                  →  lista textual resumida dos critérios atendidos
+      - explain                  →  breakdown estruturado (policy, compliance, score, contraste)
     """
-    # 1) Política base (regras estritas do perfil)
     rules = infer_specs(answers)
-    budget_brl = rules.get("budget_brl", None)
-    base_rules: Dict[str, Any] = {
-        "min_ram_gb": int(rules.get("min_ram_gb", 8) or 8),
-        "min_cpu_tier": int(rules.get("min_cpu_tier", 3) or 3),
+    base_rules: _Rules = {
+        "min_ram_gb":          int(rules.get("min_ram_gb", 8) or 8),
+        "min_cpu_tier":        int(rules.get("min_cpu_tier", 3) or 3),
         "needs_dedicated_gpu": bool(rules.get("needs_dedicated_gpu", False)),
-        "budget_brl": float(budget_brl) if budget_brl else None,
-        "budget_floor_brl": float(rules.get("budget_floor_brl")) if rules.get("budget_floor_brl") else None,
+        "budget_brl":          float(rules["budget_brl"]) if rules.get("budget_brl") else None,
+        "budget_floor_brl":    float(rules["budget_floor_brl"]) if rules.get("budget_floor_brl") else None,
     }
 
-    # 2) Scoring em L0 (sem relax)
-    notebooks = load_notebooks()
-    scored: List[Tuple[float, Notebook, List[str], Optional[int], List[Dict[str, Any]]]] = []
-    for nb in notebooks:
-        if not _is_eligible(nb, base_rules):
-            continue
-        s, reasons, price_brl, score_parts = _score(
-            nb,
-            base_rules,
-            base_rules["budget_brl"],
-            base_rules.get("budget_floor_brl"),
-        )
-        scored.append((s, nb, reasons, price_brl, score_parts))
+    scored = _score_all(base_rules)
+    scored, fallback_level, diffs = _apply_fallback(base_rules, scored, k)
 
-    scored.sort(key=lambda t: (-t[0], t[3] if t[3] is not None else math.inf))
-    top_scored = _diversify_topk(scored, k)
+    policy = base_rules if fallback_level == 0 else {
+        **base_rules, **{d["param"]: d["to"] for d in diffs}
+    }
 
-    fallback_level = 0
-    diffs: List[Dict[str, Any]] = []
-
-    # 3) Caso não haja candidatos suficientes, aplicar relaxação simples (emergencial)
-    # (mantida discretamente; registrada quando usada)
-    if not top_scored:
-        fallback_level = 1
-        relaxed = dict(base_rules)
-        # registrar diffs
-        old_ram = relaxed["min_ram_gb"]
-        old_gpu = relaxed["needs_dedicated_gpu"]
-
-        relaxed["needs_dedicated_gpu"] = False
-        relaxed["min_ram_gb"] = max(8, relaxed["min_ram_gb"] // 2)  # nunca < 8 GB
-
-        if old_ram != relaxed["min_ram_gb"]:
-            diffs.append({"param": "min_ram_gb", "from": old_ram, "to": relaxed["min_ram_gb"], "why": "fallback L1"})
-        if old_gpu != relaxed["needs_dedicated_gpu"]:
-            diffs.append({"param": "needs_dedicated_gpu", "from": old_gpu, "to": relaxed["needs_dedicated_gpu"], "why": "fallback L1"})
-
-        scored = []
-        for nb in notebooks:
-            if not _is_eligible(nb, relaxed):
-                continue
-            s, reasons, price_brl, score_parts = _score(
-                nb,
-                relaxed,
-                relaxed["budget_brl"],
-                relaxed.get("budget_floor_brl"),
-            )
-            scored.append((s, nb, reasons, price_brl, score_parts))
-
-        scored.sort(key=lambda t: (-t[0], t[3] if t[3] is not None else math.inf))
-
-        # Se ainda não houver candidatos, relaxa CPU também (fallback L2)
-        if not top_scored:
-            fallback_level = 2
-            old_cpu = relaxed["min_cpu_tier"]
-            relaxed["min_cpu_tier"] = max(3, int(old_cpu) - 4)
-
-            if old_cpu != relaxed["min_cpu_tier"]:
-                diffs.append({"param": "min_cpu_tier", "from": old_cpu, "to": relaxed["min_cpu_tier"], "why": "fallback L2"})
-
-            scored = []
-            for nb in notebooks:
-                if not _is_eligible(nb, relaxed):
-                    continue
-                s, reasons, price_brl, score_parts = _score(
-                    nb,
-                    relaxed,
-                    relaxed["budget_brl"],
-                    relaxed.get("budget_floor_brl"),
-                )
-                reasons.append("Relaxação de critérios (CPU)")  # auditável
-                scored.append((s, nb, reasons, price_brl, score_parts))
-
-            scored.sort(key=lambda t: (-t[0], t[3] if t[3] is not None else math.inf))
-            top_scored = _diversify_topk(scored, k)
-        top_scored = _diversify_topk(scored, k)
-
-    # 4) Montagem dos resultados com EXPLICAÇÃO
-    #    - policy_after = base_rules (L0) ou relaxed (L1)
-    policy_after = base_rules if fallback_level == 0 else {**base_rules, **{d["param"]: d["to"] for d in diffs}}
-
-    # vizinhos para contraste (próximo candidato no ranking)
+    trio  = _select_trio(scored)
+    flat  = [{"key": key, "label": label, "item": item} for key, label, item in trio]
     results: List[Dict[str, Any]] = []
-    # Construir uma lista “plana” para facilitar neighbor do próximo
-    flat_top: List[Dict[str, Any]] = []
-    for score, nb, reasons, price_brl, score_parts in top_scored:
-        flat_top.append({
-            "_score": score,
-            "nb": nb,
-            "reasons": reasons,
-            "price_brl": price_brl,
-            "score_parts": score_parts
-        })
 
-    for idx, entry in enumerate(flat_top):
-        nb = entry["nb"]
-        price_brl = entry["price_brl"]
-        nb_dict = {
-            "name": nb.name,
-            "company": nb.company,
-            "cpu": nb.cpu,
-            "cpu_tier": _cpu_tier(nb.cpu),
-            "ram_gb": nb.ram_gb,
-            "gpu": nb.gpu,
-            "screen": _screen_short(nb),
-            "price_brl": price_brl,
+    for idx, entry in enumerate(flat):
+        key, label             = entry["key"], entry["label"]
+        ss, fs, nb, reasons, price, parts = entry["item"]
+
+        nb_dict: Dict[str, Any] = {
+            "category":      label,
+            "category_key":  key,
+            "name":          nb.name,
+            "company":       nb.company,
+            "cpu":           nb.cpu,
+            "cpu_tier":      _cpu_tier(nb.cpu),
+            "ram_gb":        nb.ram_gb,
+            "gpu":           nb.gpu,
+            "gpu_dedicated": nb.gpu_dedicated,
+            "gpu_vram_gb":   nb.gpu_vram_gb,
+            "screen":        _screen_label(nb),
+            "storage":       nb.storage,
+            "storage_gb":    nb.storage_gb,
+            "storage_type":  nb.storage_type,
+            "os":            nb.os,
+            "rating":        nb.rating,
+            "warranty_years":nb.warranty_years,
+            "price_brl":     price,
         }
 
-        # próximo candidato para contraste (se houver)
-        neighbor_dict = None
-        if idx + 1 < len(flat_top):
-            nb2 = flat_top[idx + 1]["nb"]
-            neighbor_dict = {
-                "ram_gb": nb2.ram_gb,
-                "gpu": nb2.gpu,
-                "price_brl": flat_top[idx + 1]["price_brl"],
-            }
+        neighbor = None
+        if idx + 1 < len(flat):
+            _, _, nb2, _, price2, _ = flat[idx + 1]["item"]
+            neighbor = {"ram_gb": nb2.ram_gb, "gpu_dedicated": nb2.gpu_dedicated, "price_brl": price2}
 
-        explain = _build_explanation_dict(
-            nb_dict=nb_dict,
-            policy_after=policy_after,
-            score_parts=entry["score_parts"],
-            neighbor_dict=neighbor_dict,
-            fallback_level=fallback_level,
-            diffs=diffs
-        )
-
-        # manter “reasons” legadas + “explain” novo
-        results.append({**nb_dict, "reasons": entry["reasons"], "explain": explain})
+        results.append({
+            **nb_dict,
+            "reasons": reasons,
+            "explain": _build_explanation(nb_dict, policy, parts, neighbor, fallback_level, diffs),
+        })
 
     return results
